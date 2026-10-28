@@ -77,11 +77,30 @@ export class Track {
     this.dTempo = toF32(d.tempo_local_bpm);
     this.oTempo = toF32(o.tempo_local_bpm);
 
+    // Zakres melodii wokalu (p05/p95 klatek śpiewanych) — mapowanie wysokości wstęgi
+    {
+      const mv = [];
+      for (let i = 0; i < this.n; i++) if (this.vProb[i] > 0.3) mv.push(this.vMidi[i]);
+      this.vMidiLo = percentile(mv.length ? mv : [55], 5);
+      this.vMidiHi = percentile(mv.length ? mv : [75], 95);
+    }
+
     // bas
     this.bRms = toF32(b.rms_norm);
     this.bBw = toF32(b.bandwidth_hz);
     this.bBwP95 = percentile(b.bandwidth_hz, 95);
     this.bMidi = forwardFill(b.pitch_midi);
+    this.bPeak = toF32(b.peak);
+    this.bPeakP99 = percentile(b.peak, 99);
+    // Centroid basu -> barwa rdzenia (miedź -> złoto). Zakres z percentyli utworu.
+    this.bCent = toF32(b.centroid_hz);
+    this.bCentLo = percentile(b.centroid_hz, 5);
+    this.bCentHi = percentile(b.centroid_hz, 95);
+    // Onsety basu (atak rdzenia) — [czas_s, siła], posortowane
+    const bons = S.bas.events.onsets.slice().sort((a, b) => a[0] - b[0]);
+    this.bOnsetT = Float64Array.from(bons, (x) => x[0]);
+    this.bOnsetS = Float64Array.from(bons, (x) => x[1]);
+    this.bOnsetSP95 = percentile(bons.map((x) => x[1]), 95);
 
     // bębny
     this.dRms = toF32(d.rms_norm);
@@ -128,6 +147,8 @@ export class Track {
     // przy niższym fps render mógłby przeskoczyć krótki pik onsetu.
     const ons = S.bebny.events.onsets.slice().sort((a, b) => a[0] - b[0]);
     this.onsetT = Float64Array.from(ons, (x) => x[0]);
+    this.onsetS = Float64Array.from(ons, (x) => x[1]); // siła onsetu (z analizy)
+    this.onsetSP95 = percentile(ons.map((x) => x[1]), 95);
     // Progi klasyfikacji perkusji liczone z tego utworu: dolna tercja centroidu = stopa,
     // górna = talerze, środek = werbel. (Stałe progi względem p75 nie dawały prawie żadnych talerzy.)
     const cs = [];
@@ -171,19 +192,29 @@ export class Track {
     return arr[i] + (arr[j] - arr[i]) * (f - i);
   }
 
-  // Indeksy onsetów z przedziału (t0, t1]: [początek, koniec)
-  onsetsBetween(t0, t1) {
+  // Indeksy zdarzeń z przedziału (t0, t1] w posortowanej tablicy czasów
+  _between(arr, t0, t1) {
     const up = (x) => {
       let lo = 0;
-      let hi = this.onsetT.length;
+      let hi = arr.length;
       while (lo < hi) {
         const mid = (lo + hi) >> 1;
-        if (this.onsetT[mid] <= x) lo = mid + 1;
+        if (arr[mid] <= x) lo = mid + 1;
         else hi = mid;
       }
       return lo;
     };
     return [up(t0), up(t1)];
+  }
+
+  // Onsety bębnów
+  onsetsBetween(t0, t1) {
+    return this._between(this.onsetT, t0, t1);
+  }
+
+  // Onsety basu
+  bassOnsetsBetween(t0, t1) {
+    return this._between(this.bOnsetT, t0, t1);
   }
 
   sectionAt(t) {
