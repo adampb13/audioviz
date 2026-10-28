@@ -69,6 +69,13 @@ export class Track {
     this.vMidi = forwardFill(w.pitch_midi);
     this.vFlatP95 = percentile(w.flatness, 95);
     this.vZcrP95 = percentile(w.zcr, 95);
+    // Barwa wokalu (centroid) — steruje wysokością fali wokalnej; chwilowe tempo utworu
+    this.vCent = toF32(w.centroid_hz);
+    this.vCentP95 = percentile(w.centroid_hz, 95);
+    this.vTempo = toF32(w.tempo_local_bpm);
+    this.bTempo = toF32(b.tempo_local_bpm);
+    this.dTempo = toF32(d.tempo_local_bpm);
+    this.oTempo = toF32(o.tempo_local_bpm);
 
     // bas
     this.bRms = toF32(b.rms_norm);
@@ -89,6 +96,30 @@ export class Track {
     this.oRms = toF32(o.rms_norm);
     this.oChroma = o.chroma.map((band) => toF32(band)); // [12][n]
     this.oMel = o.mel_db.map((band) => toF32(band)); // [32][n]
+
+    // Barwa miksu (kolor sfery): centroid ważony głośnością każdego stemu.
+    // Gdy wszystko cichnie, barwa spada do 0 (sfera ciemnieje) — to zamierzone.
+    const wCent = toF32(w.centroid_hz);
+    const bCent = toF32(b.centroid_hz);
+    const dCent = toF32(d.centroid_hz);
+    const oCent = toF32(o.centroid_hz);
+    this.centMix = new Float32Array(this.n);
+    for (let i = 0; i < this.n; i++) {
+      const ws = this.vRms[i] + this.bRms[i] + this.dRms[i] + this.oRms[i];
+      this.centMix[i] = ws > 1e-6
+        ? (this.vRms[i] * wCent[i] + this.bRms[i] * bCent[i] + this.dRms[i] * dCent[i] + this.oRms[i] * oCent[i]) / ws
+        : 0;
+    }
+    this.centMixP95 = percentile(this.centMix, 95);
+
+    // Chwilowe tempo miksu (ważone głośnością stemów); 100 gdy wszystko cichnie
+    this.tempoMix = new Float32Array(this.n);
+    for (let i = 0; i < this.n; i++) {
+      const ws = this.vRms[i] + this.bRms[i] + this.dRms[i] + this.oRms[i];
+      this.tempoMix[i] = ws > 1e-6
+        ? (this.vRms[i] * this.vTempo[i] + this.bRms[i] * this.bTempo[i] + this.dRms[i] * this.dTempo[i] + this.oRms[i] * this.oTempo[i]) / ws
+        : 100;
+    }
 
     // Beaty bębnów (posortowane) do sprawdzania, czy uderzenie pokrywa się z tempem
     this.beats = Float64Array.from(S.bebny.events.beats).sort();
