@@ -1,47 +1,89 @@
-// System 3: WSTĘGA WOKALU — szeroka, pozioma rzeka jedwabiu DALEKO za sferą
-// (audit v2 P0-B: deska, nie trail). Sztywna geometria x -80..80, y=9, z=-28;
-// szerokość z wygładzonego RMSslow (max ~3.3 m), jasność z RMSfast, kontur Y
-// z pitch (płytko, +/-1.2 m). Zero fbm w alpha — jedwab to gładki gradient
-// + 5 cienkich podłużnych włókien połysku. Bez wokalu: nić 0.3 m, alpha 0.08.
+// System 3: WSTĘGA WOKALU — strumień jedwabiu, który LECI od prawej do lewej.
+//
+// Geometria jest sztywna (x -80..80, z=-28), ale KAŻDA KOLUMNA pokazuje wokal
+// z innego momentu: bufor historii 256 próbek @20 Hz (okno 12.75 s) leci do
+// tekstury 256x1 (RGBA float) i jest próbkowany w vertex shaderze.
+//   R = pitch_midi  -> Y: melodia 1:1 (52..81 -> 0.6..15.0 m, 0.5 m na półton)
+//   G = szerokość [m] (rms_norm + brama frazy: 0.14 m laser .. 10 m pas)
+//   B = centroid 0..1 -> barwa: złoto (ciemny śpiew) -> krem -> biel (przegrzanie)
+//   A = wobble 0..1 (tempo_local_bpm x ruchliwość melodii) -> siła falowania
+// Przesunięcie w czasie jest ciągłe (uShift = ułamek texela), więc strumień płynie
+// gładko, a nie skokowo co 50 ms.
 import * as THREE from "three";
 import { PAL } from "./glsl.js";
 import { sampleAt, clamp, damp } from "./data.js";
 
-const SEGS = 256;    // segmenty wzdłuż X
-const ACROSS = 8;    // segmenty w poprzek (falloff krawędzi)
+const SEGS = 320;      // segmenty wzdłuż X (~0.5 m na segment)
+const ACROSS = 8;      // segmenty w poprzek (falloff krawędzi)
 const LAYERS = 3;
-const BASE_Y = 4.2;  // niżej w kadrze: pasmo wisi tuż nad horyzontem, nie pod niebem
 const BASE_Z = -28.0;
 
+const HIST_N = 256;
+const HIST_STEP = 0.05;                  // 20 Hz
+const WINDOW = (HIST_N - 1) * HIST_STEP;  // 12.75 s historii w kadrze
+
+const PITCH_LO = 52.0;   // ~E3 — dolne partie piersiowe
+const PITCH_HI = 81.0;   // ~A5 — falset/krzyk
+const Y_LO = 1.6;        // nad horyzontem, żeby laser nie leżał na linii gór
+const Y_HI = 18.0;       // wysoko w kadrze
+const Y_PER_SEMI = (Y_HI - Y_LO) / (PITCH_HI - PITCH_LO); // 0.5 m na półton
+
+const W_MIN = 0.14;      // laser
+const W_MAX = 10.0;      // masywny pas na cały kadr
+
 const VERT = /* glsl */ `
-uniform float uTime;
+uniform sampler2D uHist;
+uniform float uShift;   // (t - tNewest)/HIST_STEP, w texelach [0,1)
+uniform float uSpan;    // HIST_N - 1
+uniform float uN;       // HIST_N
 uniform float uLayer;
-uniform float uWidth;   // stabilna szerokość pasma (m)
-uniform float uPitchY;  // (midiSmooth-62)*0.10, płytki kontur
+uniform float uPhaseY;  // zintegrowana faza (tempo) — bez szarpnięcia przy zmianie BPM
+uniform float uPhaseZ;
 uniform float uVoiced;
 varying vec2 vUv;
 varying vec3 vWorld;
+varying float vCen;
+varying float vWob;
+varying float vWidth;
+
+// u = 0 -> najstarsza próbka (lewa krawędź), u = 1 -> teraz (prawa krawędź)
+vec4 histAt(float u) {
+  float i = clamp(u * uSpan - uShift, 0.0, uSpan);
+  float i0 = floor(i);
+  float f = i - i0;
+  float i1 = min(i0 + 1.0, uSpan);
+  vec4 a = texture2D(uHist, vec2((i0 + 0.5) / uN, 0.5));
+  vec4 b = texture2D(uHist, vec2((i1 + 0.5) / uN, 0.5));
+  return mix(a, b, f);
+}
+
 void main() {
   vUv = uv;
-  float x = position.x; // -80..80
+  float x = position.x;
 
-  // szerokość -> siła zagięć: nić między frazami jest prosta, pełne pasmo faluje mocno
-  // (wide 0..1 z uWidth 0.6..3.0 m; smoothstep, żeby przejście było ciągłe)
-  float wide = clamp((uWidth - 0.6) / 2.4, 0.0, 1.0);
-  wide = wide * wide * (3.0 - 2.0 * wide);
-  float bendAmp = (0.18 + 1.85 * wide) * uVoiced;   // pionowe wędrowanie pasma
-  float foldAmp = 2.6 * wide * uVoiced;             // zagięcia w głąb sceny (Z)
+  vec4 S = histAt(uv.x);
+  float pitch = S.r;
+  float width = S.g;
+  float cen = S.b;
+  float wob = S.a;
+  vCen = cen;
+  vWob = wob;
+  vWidth = width;
 
-  float yBase = ${BASE_Y.toFixed(1)} + uPitchY + (uLayer - 1.0) * 0.15;
-  yBase += sin(x * 0.13 + uTime * 0.35) * bendAmp;
-  yBase += sin(x * 0.29 - uTime * 0.22 + 1.7) * bendAmp * 0.42;
+  // 1. melodia: Y wprost z pitch_midi (niskie partie schodzą, falset unosi)
+  float yMel = ${Y_LO.toFixed(2)} + (clamp(pitch, ${PITCH_LO.toFixed(1)}, ${PITCH_HI.toFixed(1)}) - ${PITCH_LO.toFixed(1)}) * ${Y_PER_SEMI.toFixed(4)};
 
-  // zagięcia: pasmo podchodzi do kamery i odchodzi — jedwab marszczy się w głąb
-  float zFold = sin(x * 0.07 + uTime * 0.19) * foldAmp
-              + sin(x * 0.18 - uTime * 0.13 + 0.9) * foldAmp * 0.35;
+  // 2. falowanie: drobna fala w Y (melodia zostaje czytelna) + duże marszczenie w Z
+  float wn = clamp(width / ${W_MAX.toFixed(1)}, 0.0, 1.0);
+  float ripple = sin(x * 0.50 + uPhaseY) * (0.05 + 0.22 * wob);
+  float fold = sin(x * 0.10 + uPhaseZ) * (0.35 + 1.70 * wn) * wob
+             + sin(x * 0.25 - uPhaseZ * 1.3 + 0.9) * (0.15 + 0.80 * wn) * wob;
 
-  float y = yBase + (uv.y - 0.5) * uWidth;
-  vec4 wp = modelMatrix * vec4(x, y, zFold, 1.0);
+  // 3. przekrój: grubość = głośność; warstwy rozsuwają się proporcjonalnie
+  float h = uv.y - 0.5;
+  float y = yMel + ripple + h * width + (uLayer - 1.0) * width * 0.10;
+
+  vec4 wp = modelMatrix * vec4(x, y, fold, 1.0);
   vWorld = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
@@ -49,40 +91,44 @@ void main() {
 
 const FRAG = /* glsl */ `
 precision highp float;
-uniform float uGlow;    // z RMSfast — jasność
+uniform float uGlow;
 uniform float uVoiced;
-uniform float uCent;    // 0..1 — barwa bursztyn <-> krem
 uniform float uLayerAlpha;
-uniform vec3 uGold, uCream;
+uniform vec3 uGold, uCream, uWhite;
 varying vec2 vUv;
 varying vec3 vWorld;
+varying float vCen;
+varying float vWob;
+varying float vWidth;
 void main() {
-  // miękki falloff poprzeczny (szeroki jednolity rdzeń) + wygaśnięcie końców
+  // miękki falloff poprzeczny + wygaśnięcie obu końców pasma
   // (1.0 - smoothstep) zamiast smoothstep z odwróconymi krawędziami — tamten jest
   // niezdefiniowany w GLSL i potrafi dać NaN na sterownikach D3D
   float edge = smoothstep(0.0, 0.22, vUv.y) * (1.0 - smoothstep(0.78, 1.0, vUv.y));
-  edge *= smoothstep(0.0, 0.02, vUv.x) * (1.0 - smoothstep(0.98, 1.0, vUv.x));
+  edge *= smoothstep(0.0, 0.03, vUv.x) * (1.0 - smoothstep(0.985, 1.0, vUv.x));
 
   // 5 cienkich podłużnych włókien połysku — gładkie, bez szumu
   float fib = pow(clamp(abs(sin(vUv.y * 3.14159 * 5.0)), 0.0, 1.0), 24.0);
 
-  // pseudo-fresnel: krawędzie góra/dół łapią połysk.
-  // cross() z pochodnych może wyjść zerowy (pasmo widziane brzegiem) — wtedy
-  // normalize() daje NaN, a NaN w buforze HDR rozjeżdża się po mipach blooma
-  // w czarne, prostokątne bloki. Dlatego długość z guardem i clamp na podstawie pow().
+  // pseudo-fresnel; cross() z pochodnych może wyjść zerowy (pasmo widziane brzegiem)
   vec3 Nraw = cross(dFdx(vWorld), dFdy(vWorld));
   float Nlen = length(Nraw);
   vec3 N = Nlen > 1e-9 ? Nraw / Nlen : vec3(0.0, 1.0, 0.0);
   vec3 V = normalize(cameraPosition - vWorld);
   float fres = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 1.6);
 
-  vec3 tint = mix(uGold, uCream, clamp(uCent * 0.5, 0.0, 0.6));
-  vec3 col = tint * uGlow * (0.8 + 0.35 * fib);
-  col += uCream * fres * 0.10 * (0.2 + 0.8 * uVoiced);
-  col += uGold * (1.0 - uVoiced) * 0.15; // nić między frazami — cienka, ale widoczna
+  // barwa: złoto (ciemny, piersiowy śpiew) -> krem -> biel (jasny głos / krzyk)
+  vec3 tint = mix(uGold, uCream, smoothstep(0.20, 0.75, vCen));
+  tint = mix(tint, uWhite, smoothstep(0.70, 1.00, vCen));
 
-  // bez wokalu: nić alpha 0.08 — nie znika, nie wskakuje
-  float alpha = edge * (0.08 + 0.92 * uVoiced) * uLayerAlpha;
+  vec3 col = tint * uGlow * (0.80 + 0.35 * fib);
+  col += uWhite * fres * (0.08 + 0.22 * vCen) * (0.2 + 0.8 * uVoiced);
+
+  // szeroki pas nie może wypalić kadru — jasność na piksel spada z polem powierzchni
+  float wn = clamp(vWidth / ${W_MAX.toFixed(1)}, 0.0, 1.0);
+  // baza 0.02: w ciszy wstęgi po prostu nie ma (0.12 zostawiało cienką jasną
+  // linię na linii horyzontu, czytaną jak artefakt)
+  float alpha = edge * (0.02 + 0.98 * uVoiced) * uLayerAlpha * mix(0.62, 0.50, wn);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -91,21 +137,35 @@ export class VocalRibbon {
   constructor() {
     const geo = new THREE.PlaneGeometry(160, 1, SEGS - 1, ACROSS - 1);
     this.group = new THREE.Group();
-    this.group.position.set(0, 0, BASE_Z); // daleko za sferą, nad horyzontem
+    this.group.position.set(0, 0, BASE_Z); // daleko za sferą
+
+    // bufor historii: R=pitch, G=width[m], B=centroid 0..1, A=wobble 0..1
+    this.hist = new Float32Array(HIST_N * 4);
+    for (let i = 0; i < HIST_N; i++) this.writeSlot(i, 62, W_MIN, 0.3, 0);
+    const tex = new THREE.DataTexture(this.hist, HIST_N, 1, THREE.RGBAFormat, THREE.FloatType);
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    this.tex = tex;
+
     this.layerMats = [];
-    const alphaByLayer = [0.30, 0.55, 0.30];
+    const alphaByLayer = [0.22, 0.40, 0.22];
     for (let l = 0; l < LAYERS; l++) {
       const uniforms = {
-        uTime: { value: 0 },
+        uHist: { value: tex },
+        uShift: { value: 0 },
+        uSpan: { value: HIST_N - 1 },
+        uN: { value: HIST_N },
         uLayer: { value: l },
-        uWidth: { value: 0.3 },
-        uPitchY: { value: 0 },
+        uPhaseY: { value: 0 },
+        uPhaseZ: { value: 0 },
         uVoiced: { value: 0 },
         uGlow: { value: 0.1 },
-        uCent: { value: 0.3 },
         uLayerAlpha: { value: alphaByLayer[l] },
         uGold: { value: new THREE.Color(PAL.gold) },
         uCream: { value: new THREE.Color(PAL.cream) },
+        uWhite: { value: new THREE.Color(1.0, 0.985, 0.96) },
       };
       const mat = new THREE.ShaderMaterial({
         vertexShader: VERT,
@@ -123,25 +183,118 @@ export class VocalRibbon {
       this.group.add(mesh);
       this.layerMats.push(uniforms);
     }
-    // wygładzenia (audit v2): szerokość tylko z RMSslow, jasność z RMSfast
+
+    // wygładzenia
     this.midiSmooth = 62;
+    this.prevMidi = 62;
     this.voicedSmooth = 0;
     this.rmsFast = 0;
     this.rmsSlow = 0;
-    // pamięć frazy: krótka przerwa oddechu/spółgłoski nie gasi wstęgi do zera
-    this.holdLeft = 0;   // sekundy trzymania pełnej szerokości po ostatniej dźwięcznej ramce
-    this.rmsPeak = 0;    // peak-hold energii (rozkład ~1.4 s)
+    this.centSmooth = 0.3;
+    this.pitchVel = 0;
+    // pamięć frazy: krótka przerwa oddechu nie gasi wstęgi do zera
+    this.holdLeft = 0;
+    this.rmsPeak = 0;
+    this.rmsW = 0;
+    // strumień
+    this.acc = HIST_STEP; // pierwsza próbka od razu
+    this.shift = 0;
+    this.phaseY = 0;
+    this.phaseZ = 0;
+    this.tempoNorm = 0.4;
+    this.wob = 0;
+    this.width = W_MIN;
+    this.probe = { width: W_MIN, pitch: 62, cen: 0.3, wob: 0, voiced: 0, bpm: 120, span: WINDOW };
+  }
+
+  writeSlot(i, pitch, width, cen, wob) {
+    const o = i * 4;
+    this.hist[o] = Number.isFinite(pitch) ? pitch : 62;
+    this.hist[o + 1] = Number.isFinite(width) ? width : W_MIN;
+    this.hist[o + 2] = Number.isFinite(cen) ? cen : 0.3;
+    this.hist[o + 3] = Number.isFinite(wob) ? wob : 0;
+  }
+
+  // nowa próbka wchodzi z prawej, najstarsza wypada z lewej
+  pushSample(pitch, width, cen, wob) {
+    this.hist.copyWithin(0, 4);
+    this.writeSlot(HIST_N - 1, pitch, width, cen, wob);
+    this.tex.needsUpdate = true;
+  }
+
+  // zapełnienie historii prawdziwą przeszłością (po seeku / na starcie utworu)
+  prefill(ts, track) {
+    const fps = track.fps;
+    const P = new Float32Array(HIST_N), R = new Float32Array(HIST_N);
+    const C = new Float32Array(HIST_N), B = new Float32Array(HIST_N), V = new Float32Array(HIST_N);
+    for (let i = 0; i < HIST_N; i++) {
+      const tt = ts - (HIST_N - 1 - i) * HIST_STEP;
+      P[i] = sampleAt(track.vMidi, fps, tt);
+      V[i] = sampleAt(track.vProb, fps, tt);
+      R[i] = clamp(sampleAt(track.vRms, fps, tt), 0, 1);
+      C[i] = clamp((sampleAt(track.vCent, fps, tt) - 1200) / 3800, 0, 1);
+      B[i] = sampleAt(track.tempo, fps, tt) || 120;
+    }
+    // pitch tylko tam, gdzie wokal realnie brzmi. W ciszy pyin forward-filluje
+    // ostatnią (często błędną) wartość — 76.7 przez 7 s ciszy to cienka jasna
+    // linia wysoko w kadrze, czytana jak druga linia horyzontu. Zamiast tego
+    // wątek "pamięta" najbliższą wyśpiewaną nutę.
+    for (let i = 0; i < HIST_N; i++) P[i] = V[i] >= 0.3 ? P[i] : NaN;
+    for (let i = 0; i < HIST_N; i++) {
+      if (!Number.isNaN(P[i])) continue;
+      let pick = NaN;
+      for (let j = i + 1; j < Math.min(HIST_N, i + 60); j++) if (!Number.isNaN(P[j])) { pick = P[j]; break; }
+      if (Number.isNaN(pick)) for (let j = i - 1; j >= Math.max(0, i - 60); j--) if (!Number.isNaN(P[j])) { pick = P[j]; break; }
+      P[i] = Number.isNaN(pick) ? 62 : pick;
+    }
+    for (let i = 0; i < HIST_N; i++) {
+      // pitch: MEDIANA 5 próbek — usuwa pojedyncze skoki pyin (kolec w pasmie),
+      // a zachowuje prawdziwe skoki melodii; rms/centroid: średnia (chcą być gładkie)
+      const win = [];
+      let sr = 0, sc = 0, k = 0;
+      for (let j = -2; j <= 2; j++) {
+        const q = i + j;
+        if (q < 0 || q >= HIST_N) continue;
+        win.push(P[q]); sr += R[q]; sc += C[q]; k++;
+      }
+      win.sort((a, b) => a - b);
+      // mediana usuwa kolec, 3-punktowa średnia (100 ms) wyrównuje resztkowe
+      // piłowanie pyin — bez niej cienka nić w cichych partiach rysuje się
+      // jako linia kreskowana (sąsiednie kolumny skaczą o pół tonu)
+      const pm = win[win.length >> 1];
+      const p0 = i > 0 && !Number.isNaN(P[i - 1]) ? P[i - 1] : pm;
+      const p2 = i + 1 < HIST_N ? P[i + 1] : pm;
+      const p = (p0 + 2 * pm + p2) / 4, r = sr / k, c = sc / k;
+      const vel = Math.abs(p - P[Math.max(0, i - 5)]) / (5 * HIST_STEP); // 250 ms okno
+      const act = clamp(vel / 10.0, 0, 1);
+      const tn = clamp((B[i] - 85.0) / (171.0 - 85.0), 0, 1);
+      const wob = clamp((0.30 + 0.70 * tn) * (0.25 + 0.75 * act), 0, 1) * 0.85;
+      const w = clamp(W_MIN + (W_MAX - W_MIN) * Math.pow(r, 1.3), W_MIN, W_MAX);
+      this.writeSlot(i, p, w, c, wob);
+    }
+    this.tex.needsUpdate = true;
+    this.acc = HIST_STEP;
+    this.shift = 0;
   }
 
   update(t, track, dt) {
     const ts = t + 0.08; // lead 80 ms — kompensacja latencji
+    // PAUZA: czas stoi, a dt z rAF leci dalej. Bez tego strumień sunąłby dalej
+    // w lewo i wstęga "uciekała" na pauzie, podczas gdy reszta sceny zamarza.
+    if (this.lastT !== undefined && Math.abs(t - this.lastT) < 1e-6) dt = 0;
+    // skok w czasie (start utworu, seek, demo) -> zapełnij historię prawdziwą
+    // przeszłością, inaczej lewa część pasma to przez chwilę sama cisza
+    if (this.lastT === undefined || Math.abs(t - this.lastT) > 1.0) this.prefill(ts, track);
+    this.lastT = t;
     const midiT = sampleAt(track.vMidi, track.fps, ts);
     const probT = sampleAt(track.vProb, track.fps, ts);
     const rmsT = sampleAt(track.vRms, track.fps, ts);
-    const centT = clamp(sampleAt(track.vCent, track.fps, ts) / track.vCentP95, 0, 1);
-    const voicedT = Math.min(1, Math.max(0, (probT - 0.04) / 0.24)); // smoothstep 0.04..0.28
+    // centroid_hz: 1200 Hz (ciemna klatka piersiowa) .. 5000 Hz (krzyk) -> 0..1
+    const centT = clamp((sampleAt(track.vCent, track.fps, ts) - 1200) / 3800, 0, 1);
+    const bpm = sampleAt(track.tempo, track.fps, ts) || 120;
+    const voicedT = clamp((probT - 0.04) / 0.24, 0, 1);
 
-    // --- brama frazy: śpiewa -> trzymaj 0.9 s; cisza -> powolne wygasanie (τ≈1.4 s)
+    // --- brama frazy: śpiewa -> trzymaj 0.9 s; cisza -> wygaszanie tau=1.4 s
     if (voicedT > 0.45) {
       this.holdLeft = 0.9;
       this.rmsPeak = Math.max(this.rmsPeak, rmsT);
@@ -152,37 +305,65 @@ export class VocalRibbon {
     const voicedIn = this.holdLeft > 0 ? 1 : voicedT;
     const rmsIn = Math.max(rmsT, this.rmsPeak);
 
-    this.midiSmooth = damp(this.midiSmooth, midiT, 5.0, dt);
-    // voiced: attack 12, release 0.7 (τ≈1.4 s) — zanik frazy, nie trzask
-    this.voicedSmooth = damp(
-      this.voicedSmooth, voicedIn, voicedIn > this.voicedSmooth ? 12.0 : 0.7, dt
-    );
+    // Y śledzi melodię TYLKO gdy wokal realnie brzmi — pyin w ciszy podaje
+    // forward-fillowane śmieci (np. 76.7), od których wstęga ucieka pod sufit
+    if (probT > 0.35) this.midiSmooth = damp(this.midiSmooth, midiT, 12.0, dt);
+    this.voicedSmooth = damp(this.voicedSmooth, voicedIn, voicedIn > this.voicedSmooth ? 12.0 : 0.7, dt);
     this.rmsFast = damp(this.rmsFast, rmsIn, 12.0, dt);
     this.rmsSlow = damp(this.rmsSlow, rmsIn, 3.0, dt);
+    this.centSmooth = damp(this.centSmooth, centT, 2.5, dt);
 
-    // szerokość bazowa 2.5 m, modulacja tylko +/-1.0 m — bez pompowania
-    // guard: NaN/Inf w danych nie ma prawa trafić do vertex shadera (rozwala
-    // całą geometrię pasma w śmieci na ekranie)
-    const fin = (v, fb) => (Number.isFinite(v) ? v : fb);
-    const width = fin(0.3 + this.voicedSmooth * (1.8 + this.rmsSlow * 1.2), 0.3);
-    const pitchY = fin(clamp((this.midiSmooth - 62.0) * 0.10, -1.2, 1.2), 0.0);
-    const glow = fin(
-      0.10 +
-      0.45 * this.rmsFast * (0.30 + 0.70 * this.voicedSmooth) +
-      0.10 * this.voicedSmooth,
-      0.10
+    // tempo lokalne -> 0..1 (85..171 BPM)
+    this.tempoNorm = clamp((bpm - 85.0) / (171.0 - 85.0), 0, 1);
+    // ruchliwość melodii: przeciągane słowo -> 0 (wstęga się prostuje), szybkie słowa -> 1
+    const vel = Math.abs(this.midiSmooth - this.prevMidi) / Math.max(dt, 1e-3);
+    this.pitchVel = damp(this.pitchVel, vel, 4.0, dt);
+    this.prevMidi = this.midiSmooth;
+    const act = clamp(this.pitchVel / 10.0, 0, 1);
+    this.wob = clamp((0.30 + 0.70 * this.tempoNorm) * (0.25 + 0.75 * act) * this.voicedSmooth, 0, 1);
+
+    // fazy integrowane — zmiana tempa nie może szarpnąć falą
+    const spd = (0.6 + 2.4 * this.tempoNorm) * (0.6 + 0.4 * this.wob);
+    this.phaseY += dt * spd;
+    this.phaseZ += dt * spd * 0.8;
+
+    // szerokość: laser 0.14 m -> masywny pas 10 m (rms_norm^1.3)
+    // rmsW (tau≈250 ms) — bez tego wygładzenia każde wejście słowa rozjeżdża pasmo
+    // jak trąbka: pionowa ściana w połowie kadru
+    this.rmsW = damp(this.rmsW, clamp(rmsIn, 0, 1), 4.0, dt);
+    const rmsForW = clamp(this.rmsW, 0, 1);
+    const width = clamp(
+      W_MIN + (W_MAX - W_MIN) * Math.pow(rmsForW, 1.3) * (0.45 + 0.55 * this.voicedSmooth),
+      W_MIN, W_MAX
+    );
+    const glow = clamp(
+      0.10 + 0.45 * this.rmsFast * (0.30 + 0.70 * this.voicedSmooth) + 0.08 * this.voicedSmooth,
+      0.05, 0.75
     );
 
+    // strumień 20 Hz: dopisz tyle próbek, ile minęło (po pauzie nie zalewaj bufora)
+    this.acc += dt;
+    if (this.acc > HIST_STEP * 8) this.acc = HIST_STEP * 8;
+    while (this.acc >= HIST_STEP) {
+      this.acc -= HIST_STEP;
+      this.pushSample(this.midiSmooth, width, this.centSmooth, this.wob);
+    }
+    this.shift = clamp(this.acc / HIST_STEP, 0, 1);
+
+    const fin = (v, fb) => (Number.isFinite(v) ? v : fb);
     for (const u of this.layerMats) {
-      u.uTime.value = fin(t, 0);
-      u.uWidth.value = width;
-      u.uPitchY.value = pitchY;
+      u.uHist.value = this.tex;
+      u.uShift.value = this.shift;
+      u.uPhaseY.value = fin(this.phaseY, 0);
+      u.uPhaseZ.value = fin(this.phaseZ, 0);
       u.uVoiced.value = this.voicedSmooth;
       u.uGlow.value = glow;
-      u.uCent.value = centT;
     }
-    // sonda weryfikacyjna (__viz): szerokość wstęgi i jej brama
+
     this.width = width;
-    this.probe = { width, voiced: this.voicedSmooth, rms: this.rmsSlow, hold: this.holdLeft };
+    this.probe = {
+      width, pitch: this.midiSmooth, cen: this.centSmooth, wob: this.wob,
+      voiced: this.voicedSmooth, bpm, span: WINDOW, shift: this.shift,
+    };
   }
 }
