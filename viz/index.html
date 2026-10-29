@@ -4,24 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="data:,">
-<title>Blinding Lights — wizualizacja</title>
+<title>audioviz — pustynna fala światła</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
-    font-family: system-ui, "Segoe UI", sans-serif; color: #cfe; }
+  html, body { margin: 0; height: 100%; background: #060301; overflow: hidden;
+    font-family: system-ui, "Segoe UI", sans-serif; color: #ecdfc8; }
   canvas { display: block; position: fixed; inset: 0; }
   #overlay { position: fixed; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 16px;
-    background: rgba(0,0,0,.55); transition: opacity .6s; z-index: 2; }
+    background: rgba(6,3,1,.55); transition: opacity .6s; z-index: 2; }
   #overlay.hidden { opacity: 0; pointer-events: none; }
-  #overlay small { opacity: .6; letter-spacing: .05em; }
+  #overlay small { opacity: .55; letter-spacing: .05em; }
   button { font: inherit; font-size: 18px; letter-spacing: .25em; padding: 14px 40px;
-    border-radius: 999px; border: 1px solid #7ef; background: transparent; color: #7ef;
-    cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(120,255,255,.25); }
-  button:hover { background: rgba(120,255,255,.12); }
+    border-radius: 999px; border: 1px solid #d9984a; background: transparent; color: #ffcf8a;
+    cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(217,152,74,.25); }
+  button:hover { background: rgba(217,152,74,.12); }
   #hud { position: fixed; left: 12px; bottom: 10px; z-index: 1; white-space: pre;
-    font: 12px/1.45 ui-monospace, Consolas, monospace; opacity: .55; }
+    font: 12px/1.45 ui-monospace, Consolas, monospace; opacity: .55; color: #d9984a; }
   #hud.off { display: none; }
-  #err { color: #f88; max-width: 80vw; text-align: center; }
+  #err { color: #f88; max-width: 80vw; text-align: center; white-space: pre-wrap; }
 </style>
 <script type="importmap">
 {
@@ -35,7 +35,7 @@
 <body>
 <div id="overlay">
   <button id="start">Start</button>
-  <small>Spacja: pauza · H: ukryj panel</small>
+  <small>Spacja: pauza · H: ukryj panel · utwór: ?track=nazwa</small>
   <div id="err"></div>
 </div>
 <div id="hud"></div>

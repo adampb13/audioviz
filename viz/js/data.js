@@ -1,17 +1,20 @@
 // Wczytanie analysis.json i przygotowanie tablic typowanych pod animację 60 fps.
+// JEDYNY czytnik danych — moduły sceny nie sięgają do surowego JSON-a.
 //
 // Układ danych (zweryfikowany na pliku, nie zakładany):
-//  - skalarne serie frames.* mają n_frames elementów,
-//  - mel_db, chroma, mfcc, spectral_contrast są pasmo-po-paśmie: frames.mel_db[pasmo][klatka],
-//  - events.sections to pary [start_s, koniec_s]; każdy stem ma własne sekcje, my bierzemy wokal
-//    (wokal najlepiej odzwierciedla strukturę zwrotka/refren).
+//  - meta: { fps, n_frames, duration, stems: [...] }
+//  - stems.<nazwa>.frames.* — serie skalarne długości n_frames (oś t = i / fps)
+//  - stems.<nazwa>.events.onsets — [[czas_s, siła], ...]; beats — [czas_s, ...];
+//    sections — [[start_s, koniec_s], ...]
+//  - pitch_midi ma null-e, gdy pyin nie wykrył tonu -> forwardFill + maska pitch_voiced_prob.
 
-export const STEM_NAMES = ["wokal", "bas", "bebny", "inne"];
+export const STEM_FILES = ["wokal", "bas", "bebny", "inne"];
 
 export const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+export const lerp = (a, b, t) => a + (b - a) * t;
 
-// Wykładnicze wygładzanie niezależne od fps: po czasie dt dąży do celu z szybkością lambda.
-// To odpowiednik "x += (cel - x) * 0.1" z konspektu, ale nie zależy od liczby klatek.
+// Wykładnicze wygładzanie niezależne od fps ("x += (cel - x) * alpha" z konspektu,
+// zapisane jako szybkość lambda: alpha=0.12@60fps -> lambda ~7.7, alpha=0.08 -> ~5.0).
 export const damp = (cur, target, lambda, dt) =>
   cur + (target - cur) * (1 - Math.exp(-lambda * dt));
 
@@ -32,20 +35,49 @@ function toF32(arr, fill = 0) {
   return out;
 }
 
-// Brakujące wartości (null, gdy pyin nie wykrył tonu) wypełnia poprzednią wartością,
-// żeby pozycja wstęgi nie skakała do zera. Maskę ważności liczymy osobno (pitch_voiced_prob).
-function forwardFill(arr) {
+// Brakujące wartości pitch (null) wypełnia poprzednią, żeby pozycja nie skakała do zera.
+function forwardFill(arr, seed = 60) {
   const n = arr.length;
   const out = new Float32Array(n);
   let first = 0;
   while (first < n && (arr[first] === null || !Number.isFinite(arr[first]))) first++;
-  let last = first < n ? arr[first] : 60;
+  let last = first < n ? arr[first] : seed;
   for (let i = 0; i < n; i++) {
     const v = arr[i];
     if (v !== null && Number.isFinite(v)) last = v;
     out[i] = last;
   }
   return out;
+}
+
+// Liniowa interpolacja serii klatkowej w czasie t [s] — zasada płynności absolutnej.
+export function sampleAt(arr, fps, t) {
+  const f = t * fps;
+  let i = Math.floor(f);
+  if (i < 0) i = 0;
+  if (i >= arr.length - 1) return arr[arr.length - 1];
+  const fr = f - i;
+  return arr[i] + (arr[i + 1] - arr[i]) * fr;
+}
+
+// Kursor po posortowanych czasach zdarzeń (beaty/onsety) — triggery impulsowe,
+// NIE interpolowane. reset(t) po seeku, poll(t, cb) w pętli.
+export class EventCursor {
+  constructor(times, values = null) {
+    this.times = times;
+    this.values = values;
+    this.i = 0;
+  }
+  reset(t) {
+    this.i = 0;
+    while (this.i < this.times.length && this.times[this.i] < t) this.i++;
+  }
+  poll(t, cb) {
+    while (this.i < this.times.length && this.times[this.i] <= t) {
+      cb(this.times[this.i], this.values ? this.values[this.i] : 1);
+      this.i++;
+    }
+  }
 }
 
 export class Track {
@@ -63,190 +95,55 @@ export class Track {
 
     // wokal
     this.vRms = toF32(w.rms_norm);
-    this.vFlat = toF32(w.flatness);
-    this.vZcr = toF32(w.zcr);
     this.vProb = toF32(w.pitch_voiced_prob);
     this.vMidi = forwardFill(w.pitch_midi);
-    this.vFlatP95 = percentile(w.flatness, 95);
-    this.vZcrP95 = percentile(w.zcr, 95);
-    // Barwa wokalu (centroid) — steruje wysokością fali wokalnej; chwilowe tempo utworu
     this.vCent = toF32(w.centroid_hz);
-    this.vCentP95 = percentile(w.centroid_hz, 95);
-    this.vTempo = toF32(w.tempo_local_bpm);
-    this.bTempo = toF32(b.tempo_local_bpm);
-    this.dTempo = toF32(d.tempo_local_bpm);
-    this.oTempo = toF32(o.tempo_local_bpm);
-
-    // Zakres melodii wokalu (p05/p95 klatek śpiewanych) — mapowanie wysokości wstęgi
-    {
-      const mv = [];
-      for (let i = 0; i < this.n; i++) if (this.vProb[i] > 0.3) mv.push(this.vMidi[i]);
-      this.vMidiLo = percentile(mv.length ? mv : [55], 5);
-      this.vMidiHi = percentile(mv.length ? mv : [75], 95);
-    }
+    this.vCentP95 = percentile(w.centroid_hz, 95) || 1;
 
     // bas
     this.bRms = toF32(b.rms_norm);
-    this.bBw = toF32(b.bandwidth_hz);
-    this.bBwP95 = percentile(b.bandwidth_hz, 95);
-    this.bMidi = forwardFill(b.pitch_midi);
     this.bPeak = toF32(b.peak);
-    this.bPeakP99 = percentile(b.peak, 99);
-    // Centroid basu -> barwa rdzenia (miedź -> złoto). Zakres z percentyli utworu.
     this.bCent = toF32(b.centroid_hz);
-    this.bCentLo = percentile(b.centroid_hz, 5);
-    this.bCentHi = percentile(b.centroid_hz, 95);
-    // Onsety basu (atak rdzenia) — [czas_s, siła], posortowane
-    const bons = S.bas.events.onsets.slice().sort((a, b) => a[0] - b[0]);
-    this.bOnsetT = Float64Array.from(bons, (x) => x[0]);
-    this.bOnsetS = Float64Array.from(bons, (x) => x[1]);
-    this.bOnsetSP95 = percentile(bons.map((x) => x[1]), 95);
+    this.bCentP95 = percentile(b.centroid_hz, 95) || 1;
 
     // bębny
     this.dRms = toF32(d.rms_norm);
-    this.dOnset = toF32(d.onset_norm);
-    this.dOnsetThr = percentile(d.onset_norm, 92);
+    this.dPeak = toF32(d.peak);
+    this.dPeakP99 = percentile(d.peak, 99) || 1;
     this.dCent = toF32(d.centroid_hz);
 
-    this.dPeak = toF32(d.peak);
-    this.dPeakP99 = percentile(d.peak, 99);
-
-    // inne (zorza)
+    // inne
     this.oRms = toF32(o.rms_norm);
-    this.oChroma = o.chroma.map((band) => toF32(band)); // [12][n]
-    this.oMel = o.mel_db.map((band) => toF32(band)); // [32][n]
+    this.oCent = toF32(o.centroid_hz);
+    this.oCentP95 = percentile(o.centroid_hz, 95) || 1;
+    this.tempo = toF32(o.tempo_local_bpm || w.tempo_local_bpm, 120);
 
-    // Barwa miksu (kolor sfery): centroid ważony głośnością każdego stemu.
-    // Gdy wszystko cichnie, barwa spada do 0 (sfera ciemnieje) — to zamierzone.
-    const wCent = toF32(w.centroid_hz);
-    const bCent = toF32(b.centroid_hz);
-    const dCent = toF32(d.centroid_hz);
-    const oCent = toF32(o.centroid_hz);
-    this.centMix = new Float32Array(this.n);
-    for (let i = 0; i < this.n; i++) {
-      const ws = this.vRms[i] + this.bRms[i] + this.dRms[i] + this.oRms[i];
-      this.centMix[i] = ws > 1e-6
-        ? (this.vRms[i] * wCent[i] + this.bRms[i] * bCent[i] + this.dRms[i] * dCent[i] + this.oRms[i] * oCent[i]) / ws
-        : 0;
-    }
-    this.centMixP95 = percentile(this.centMix, 95);
-
-    // Chwilowe tempo miksu (ważone głośnością stemów); 100 gdy wszystko cichnie
-    this.tempoMix = new Float32Array(this.n);
-    for (let i = 0; i < this.n; i++) {
-      const ws = this.vRms[i] + this.bRms[i] + this.dRms[i] + this.oRms[i];
-      this.tempoMix[i] = ws > 1e-6
-        ? (this.vRms[i] * this.vTempo[i] + this.bRms[i] * this.bTempo[i] + this.dRms[i] * this.dTempo[i] + this.oRms[i] * this.oTempo[i]) / ws
-        : 100;
-    }
-
-    // Beaty bębnów (posortowane) do sprawdzania, czy uderzenie pokrywa się z tempem
-    this.beats = Float64Array.from(S.bebny.events.beats).sort();
-
-    // Onsety bębnów z analizy (librosa, [czas_s, siła]). Używamy czasów zamiast progu na klatkach:
-    // przy niższym fps render mógłby przeskoczyć krótki pik onsetu.
-    const ons = S.bebny.events.onsets.slice().sort((a, b) => a[0] - b[0]);
+    // Zdarzenia: beaty (bębny + bas) i onsety bębnów z siłą znormalizowaną p95.
+    this.beatsDrums = Float64Array.from(S.bebny.events.beats).sort();
+    this.beatsBass = Float64Array.from(S.bas.events.beats).sort();
+    const ons = S.bebny.events.onsets.slice().sort((a, b2) => a[0] - b2[0]);
+    const onsStrP95 = percentile(ons.map((x) => x[1]), 95) || 1;
     this.onsetT = Float64Array.from(ons, (x) => x[0]);
-    this.onsetS = Float64Array.from(ons, (x) => x[1]); // siła onsetu (z analizy)
-    this.onsetSP95 = percentile(ons.map((x) => x[1]), 95);
-    // Progi klasyfikacji perkusji liczone z tego utworu: dolna tercja centroidu = stopa,
-    // górna = talerze, środek = werbel. (Stałe progi względem p75 nie dawały prawie żadnych talerzy.)
-    const cs = [];
-    for (const te of this.onsetT) {
-      const fr = clamp(Math.round(te * this.fps), 0, this.n - 1);
-      if (this.dOnset[fr] >= 0.5 * this.dOnsetThr) cs.push(this.dCent[fr]);
-    }
-    this.onsetCentLo = percentile(cs, 33);
-    this.onsetCentHi = percentile(cs, 67);
+    this.onsetS = Float32Array.from(ons, (x) => clamp(x[1] / onsStrP95, 0.15, 1));
 
+    // Sekcje z wokalu (najlepiej oddaje strukturę zwrotka/refren)
     this.sections = S.wokal.events.sections.map(([s, e]) => ({ start: s, end: e }));
 
-    // Miks energii wszystkich stemów, znormalizowany p95 (0..~1.2)
-    this.mixRms = new Float32Array(this.n);
+    // Energia miksu dla sfery-serca: bas + inne + piki bębnów, normalizowana p95.
+    this.energy = new Float32Array(this.n);
     for (let i = 0; i < this.n; i++) {
-      this.mixRms[i] = (this.vRms[i] + this.bRms[i] + this.dRms[i] + this.oRms[i]) / 4;
+      const e = 0.45 * this.bRms[i] + 0.3 * this.oRms[i] + 0.25 * clamp(this.dPeak[i] / this.dPeakP99, 0, 1);
+      this.energy[i] = e;
     }
-    const mixP95 = percentile(this.mixRms, 95);
-    for (let i = 0; i < this.n; i++) this.mixRms[i] = clamp(this.mixRms[i] / mixP95, 0, 1.2);
-
-    // Intensywność sekcji (reżyser): średnia energia w sekcji, skala względem najgłośniejszej
-    const means = this.sections.map((sec) => {
-      const i0 = Math.max(0, Math.floor(sec.start * this.fps));
-      const i1 = Math.min(this.n, Math.max(i0 + 1, Math.floor(sec.end * this.fps)));
-      let acc = 0;
-      for (let i = i0; i < i1; i++) acc += this.mixRms[i];
-      return acc / (i1 - i0);
-    });
-    const maxMean = Math.max(...means, 1e-6);
-    this.sectionIntensity = means.map((v) => 0.12 + 0.88 * (v / maxMean));
-  }
-
-  frameAt(t) {
-    return clamp(t * this.fps, 0, this.n - 1);
-  }
-
-  // Interpolacja liniowa między klatkami (płynny pitch między klatkami 60 fps)
-  at(arr, f) {
-    const i = Math.floor(f);
-    const j = i + 1 < this.n ? i + 1 : i;
-    return arr[i] + (arr[j] - arr[i]) * (f - i);
-  }
-
-  // Indeksy zdarzeń z przedziału (t0, t1] w posortowanej tablicy czasów
-  _between(arr, t0, t1) {
-    const up = (x) => {
-      let lo = 0;
-      let hi = arr.length;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (arr[mid] <= x) lo = mid + 1;
-        else hi = mid;
-      }
-      return lo;
-    };
-    return [up(t0), up(t1)];
-  }
-
-  // Onsety bębnów
-  onsetsBetween(t0, t1) {
-    return this._between(this.onsetT, t0, t1);
-  }
-
-  // Onsety basu
-  bassOnsetsBetween(t0, t1) {
-    return this._between(this.bOnsetT, t0, t1);
+    const eP95 = percentile(this.energy, 95) || 1;
+    for (let i = 0; i < this.n; i++) this.energy[i] = clamp(this.energy[i] / eP95, 0, 1.15);
   }
 
   sectionAt(t) {
-    const secs = this.sections;
-    for (let i = 0; i < secs.length; i++) if (t < secs[i].end) return i;
-    return secs.length - 1;
-  }
-
-  // Odległość w sekundach do najbliższego beatu bębnów
-  nearestBeatDist(t) {
-    const B = this.beats;
-    let lo = 0;
-    let hi = B.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (B[mid] < t) lo = mid + 1;
-      else hi = mid;
+    for (let i = 0; i < this.sections.length; i++) {
+      const s = this.sections[i];
+      if (t >= s.start && t < s.end) return i;
     }
-    let best = Infinity;
-    if (lo < B.length) best = Math.min(best, Math.abs(B[lo] - t));
-    if (lo > 0) best = Math.min(best, Math.abs(B[lo - 1] - t));
-    return best;
-  }
-
-  chromaInto(idx, out) {
-    for (let k = 0; k < 12; k++) out[k] = this.oChroma[k][idx];
-    return out;
-  }
-
-  // mel_db -> 0..1 (stała normalizacja: -60 dB..+10 dB)
-  melInto(idx, out) {
-    for (let b = 0; b < 32; b++) out[b] = clamp((this.oMel[b][idx] + 60) / 70, 0, 1);
-    return out;
+    return this.sections.length - 1;
   }
 }
