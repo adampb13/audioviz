@@ -3,7 +3,7 @@
 import * as THREE from "three";
 import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
 
-const MAX_WAVES = 10; // każdy mocny bit ma własną falę (życie 1.0-2.6 s zależnie od siły)
+const MAX_WAVES = 14; // każdy transient ma własną falę; max współbieżnych policzony z danych = 12
 
 const VERT = /* glsl */ `
 uniform float uTime;
@@ -37,7 +37,7 @@ void main() {
 const FRAG = /* glsl */ `
 precision highp float;
 uniform float uTime;
-uniform vec4 uWaves[${MAX_WAVES}]; // x: t0, y: amp, z: speed, w: seed
+uniform vec4 uWaves[${MAX_WAVES}]; // x: t0, y: amp, z: speed, w: życie (0.8-2.6 s)
 uniform vec3 uCorePos;      // pozycja sfery-serca (światło kluczowe)
 uniform float uCoreGlow;    // energia sfery 0..~1.2
 uniform float uPulse;       // beatPulse 0..1

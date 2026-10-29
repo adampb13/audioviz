@@ -119,13 +119,16 @@ export class Track {
     this.oCentP95 = percentile(o.centroid_hz, 95) || 1;
     this.tempo = toF32(o.tempo_local_bpm || w.tempo_local_bpm, 120);
 
-    // Zdarzenia: beaty (bębny + bas) i onsety bębnów z siłą znormalizowaną p95.
+    // Zdarzenia: beaty (bębny + bas) i uderzenia bębnów z siłą znormalizowaną p95.
+    // "hits" = pełny detektor transientów ze stemu (events.onsets gubi ~1/3 uderzeń);
+    // fallback na onsety, gdy utwór nie ma jeszcze policzonych hits.
     this.beatsDrums = Float64Array.from(S.bebny.events.beats).sort();
     this.beatsBass = Float64Array.from(S.bas.events.beats).sort();
-    const ons = S.bebny.events.onsets.slice().sort((a, b2) => a[0] - b2[0]);
+    const rawHits = S.bebny.events.hits || S.bebny.events.onsets;
+    const ons = rawHits.slice().sort((a, b2) => a[0] - b2[0]);
     const onsStrP95 = percentile(ons.map((x) => x[1]), 95) || 1;
     this.onsetT = Float64Array.from(ons, (x) => x[0]);
-    this.onsetS = Float32Array.from(ons, (x) => clamp(x[1] / onsStrP95, 0.15, 1));
+    this.onsetS = Float32Array.from(ons, (x) => clamp(x[1] / onsStrP95, 0.05, 1));
 
     // Sekcje z wokalu (najlepiej oddaje strukturę zwrotka/refren)
     this.sections = S.wokal.events.sections.map(([s, e]) => ({ start: s, end: e }));

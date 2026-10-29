@@ -193,14 +193,14 @@ function frame() {
   onsets.poll(t, (_t0, s) => {
     atmosphere.ignite(s); // iskierki: tylko błysk
     S.onsetsFired++;
-    if (s < 0.35) return;              // słabe uderzenia (ghost notes) nie robią fali
-    if (t - lastWaveT < 0.1) return;   // tylko dedupe — KAŻDE uderzenie ma swoją falę
+    if (s < 0.02) return;              // próg tylko na cyfrową ciszę — każdy transient = fala
+    if (t - lastWaveT < 0.05) return;  // dedupe 50 ms (detektor ma rozdzielczość 16.7 ms)
     lastWaveT = t;
     const sn = clamp(s, 0, 1);
-    // życie z siły: lekki ghost = krótki pierścień, akcent = długi (max 2.6 s)
-    ground.pushWave(t, 0.12 + sn * 0.1, 7, 1.0 + sn * 1.6); // amp ≤ 0.22
+    // siła -> amplituda i życie: ghost note = mały krótki pierścień, akcent = duży, 2.6 s
+    ground.pushWave(t, 0.10 + sn * 0.12, 7, 0.9 + sn * 1.7); // amp ≤ 0.22
     S.wavesFired++;
-    S.beatPulse = 1;                   // sfera pulsuje raz, na ten sam atak
+    S.beatPulse = Math.max(S.beatPulse, 0.10 + sn * 0.90); // sfera pulsuje raz, na ten sam atak
   });
 
   // aktualizacje systemów
