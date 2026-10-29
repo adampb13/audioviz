@@ -198,7 +198,7 @@ function frame() {
     lastWaveT = t;
     const sn = clamp(s, 0, 1);
     // siła -> amplituda i życie: ghost note = mały krótki pierścień, akcent = duży, 2.6 s
-    ground.pushWave(t, 0.10 + sn * 0.12, 7, 0.9 + sn * 1.7); // amp ≤ 0.22
+    ground.pushWave(t, 0.10 + sn * 0.12, 9, 2.6 + sn * 3.4); // amp ≤ 0.22, zasięg 23-54 m
     S.wavesFired++;
     S.beatPulse = Math.max(S.beatPulse, 0.10 + sn * 0.90); // sfera pulsuje raz, na ten sam atak
   });
@@ -247,6 +247,7 @@ function frame() {
       energy: S.energy, beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, fps,
       fpsP95, calls, tris,
+      ribbonW: ribbon.width, ribbon: ribbon.probe,
       track: TRACK,
     };
   }

@@ -22,12 +22,12 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 
 | plik | rola |
 |---|---|
-| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **1 fala + 1 puls sfery na KAŻDYM uderzeniu w stem "bebny"** (`events.hits`, próg 0.02, dedupe 50 ms; amplituda i życie fali rosną z siłą 0.10-0.22 / 0.95-2.6 s); iskierki błyskają na każdym uderzeniu |
+| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **1 fala + 1 puls sfery na KAŻDYM uderzeniu w stem "bebny"** (`events.hits`, próg 0.02, dedupe 50 ms; amplituda i życie fali rosną z siłą 0.10-0.22 / 2.6-6.0 s); iskierki błyskają na każdym uderzeniu |
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch; `onsetT/onsetS` z `stems.bebny.events.hits` (fallback `onsets`); `sampleAt` (interpolacja klatek), `EventCursor` (beaty/onsety) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
-| `ground.js` | ziemia: gładka baza FBM + kolejka **max 14 fal** (1 uderzenie = 1 fala, amp ≤ 0.22, 7 m/s, życie 0.95-2.6 s zależne od siły, `sin(d·0.9)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), lekka nieregularność azymutalna; miękkie wygasanie od 38% życia; matowe oświetlenie, owalna sadzawka |
+| `ground.js` | ziemia: gładka baza FBM + kolejka **max 30 fal** (1 uderzenie = 1 fala, amp ≤ 0.22, 9 m/s, życie 2.6-6.0 s zależne od siły → zasięg 23-54 m, `sin(d·0.85)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), współśrodkowa (wspólna faza) nieregularność azymutalna; tłumienie radialne `exp(-r·0.010)` — pierścień dochodzi do krawędzi kadru, wygasanie od 72% życia; matowe oświetlenie, owalna sadzawka |
 | `core.js` | sfera-żar (r=0.9, y=0.3 wkopana): emissive 0.5+1.2·en+0.3·bp (cap 1.35, tanh-sufit), bursztyn #7a3000→#ffcf8a; halo sprite; PointLight 6+18·energy |
-| `ribbon.js` | wstęga wokalu: sztywna deska x ±80 na y=9, z=-28 (daleko za sferą); szerokość z RMSslow (0.3-3.3 m), jasność z RMSfast, kontur z pitch ±1.2 m; 3 warstwy additive, zero fbm w alpha |
+| `ribbon.js` | wstęga wokalu: sztywna deska x ±80 na y=9, z=-28 (daleko za sferą); szerokość z RMSslow (0.3-3.3 m), jasność z RMSfast, kontur z pitch ±1.2 m; **brama frazy**: po dźwięcznej ramce pełna szerokość trzymana 0.9 s + peak-hold energii (τ 1.4 s), potem release λ=0.7 (τ≈1.4 s) — krótka pauza w śpiewie nie zwija wstęgi do zera; 3 warstwy additive, zero fbm w alpha |
 | `mountains.js` | 3 warstwy gór (ridged FBM) jako sylwetki w mgle (z=170/235/310) |
 | `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury), pył 250 drobin nisko (y≤4), 8 hero bokeh od onsetów |
 | `postfx.js` | RenderPass → UnrealBloom → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES) |
@@ -40,7 +40,7 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 | `bebny.events.onsets` (siła p95) | zapalenie kolejnej iskry-bokeh |
 | `bas.rms_norm` | (przez `cross.energy`) energia → skala/jasność sfery |
 | `wokal.pitch_midi` (ffill) | kontur Y wstęgi |
-| `wokal.pitch_voiced_prob` | **voiced gate**: szerokość i widoczność wstęgi (nić ↔ pasmo) |
+| `wokal.pitch_voiced_prob` | **voiced gate + brama frazy**: szerokość i widoczność wstęgi (nić ↔ pasmo); 0.9 s podtrzymania po dźwięcznej ramce |
 | `wokal.rms_norm` | jasność/grubość wstęgi, marszczenie sfery |
 | `*.centroid_hz` (p95) | barwa wstęgi/sfery (bursztyn ↔ krem) |
 | `inne.tempo_local_bpm` | prędkość chmur na kopule |
@@ -67,7 +67,8 @@ z lokalną medianą jako progiem, `wait=3` ramki = 50 ms):
 
 Blinding Lights: 804 uderzenia (3.96/s, mediana odstępu 180 ms), pokrycie
 100% lokalnych maksimów obwiedni powyżej 0.25·p95. Każde uderzenie = jedna
-fala (+ puls sfery); siła steruje amplitudą (0.10-0.22) i życiem (0.95-2.6 s).
+fala (+ puls sfery); siła steruje amplitudą (0.10-0.22) i życiem (2.6-6.0 s, czyli
+zasięgiem 23-54 m — pierścień gaśnie dopiero przy krawędzi kadru).
 
 ## Pętla weryfikacyjna
 

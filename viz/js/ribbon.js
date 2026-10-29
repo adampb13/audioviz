@@ -108,6 +108,9 @@ export class VocalRibbon {
     this.voicedSmooth = 0;
     this.rmsFast = 0;
     this.rmsSlow = 0;
+    // pamięć frazy: krótka przerwa oddechu/spółgłoski nie gasi wstęgi do zera
+    this.holdLeft = 0;   // sekundy trzymania pełnej szerokości po ostatniej dźwięcznej ramce
+    this.rmsPeak = 0;    // peak-hold energii (rozkład ~1.4 s)
   }
 
   update(t, track, dt) {
@@ -118,13 +121,24 @@ export class VocalRibbon {
     const centT = clamp(sampleAt(track.vCent, track.fps, ts) / track.vCentP95, 0, 1);
     const voicedT = Math.min(1, Math.max(0, (probT - 0.04) / 0.24)); // smoothstep 0.04..0.28
 
+    // --- brama frazy: śpiewa -> trzymaj 0.9 s; cisza -> powolne wygasanie (τ≈1.4 s)
+    if (voicedT > 0.45) {
+      this.holdLeft = 0.9;
+      this.rmsPeak = Math.max(this.rmsPeak, rmsT);
+    } else {
+      this.holdLeft = Math.max(0, this.holdLeft - dt);
+      this.rmsPeak *= Math.exp(-dt / 1.4);
+    }
+    const voicedIn = this.holdLeft > 0 ? 1 : voicedT;
+    const rmsIn = Math.max(rmsT, this.rmsPeak);
+
     this.midiSmooth = damp(this.midiSmooth, midiT, 5.0, dt);
-    // voiced: attack 0.18, release 0.05 (alfa @60fps -> lambda)
+    // voiced: attack 12, release 0.7 (τ≈1.4 s) — zanik frazy, nie trzask
     this.voicedSmooth = damp(
-      this.voicedSmooth, voicedT, voicedT > this.voicedSmooth ? 12.0 : 3.0, dt
+      this.voicedSmooth, voicedIn, voicedIn > this.voicedSmooth ? 12.0 : 0.7, dt
     );
-    this.rmsFast = damp(this.rmsFast, rmsT, 12.0, dt);
-    this.rmsSlow = damp(this.rmsSlow, rmsT, 3.0, dt);
+    this.rmsFast = damp(this.rmsFast, rmsIn, 12.0, dt);
+    this.rmsSlow = damp(this.rmsSlow, rmsIn, 3.0, dt);
 
     // szerokość bazowa 2.5 m, modulacja tylko +/-1.0 m — bez pompowania
     const width = 0.3 + this.voicedSmooth * (1.8 + this.rmsSlow * 1.2);
@@ -142,5 +156,8 @@ export class VocalRibbon {
       u.uGlow.value = glow;
       u.uCent.value = centT;
     }
+    // sonda weryfikacyjna (__viz): szerokość wstęgi i jej brama
+    this.width = width;
+    this.probe = { width, voiced: this.voicedSmooth, rms: this.rmsSlow, hold: this.holdLeft };
   }
 }

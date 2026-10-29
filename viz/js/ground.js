@@ -1,9 +1,9 @@
 // System 1: ZIEMIA — ciemna, pomarszczona pustynia z koncentrycznymi falami od uderzeń bębnów.
-// 1 mocny bit = 1 fala (max 10 slotów); fala liczona per-piksel, życie skaluje się z siłą.
+// 1 uderzenie = 1 fala (max 30 slotów); fala per-piksel, życie z siły (zasięg 23-54 m, do krawędzi kadru).
 import * as THREE from "three";
 import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
 
-const MAX_WAVES = 14; // każdy transient ma własną falę; max współbieżnych policzony z danych = 12
+const MAX_WAVES = 30; // każdy transient ma własną falę; max współbieżnych policzony z danych = 27
 
 const VERT = /* glsl */ `
 uniform float uTime;
@@ -37,7 +37,7 @@ void main() {
 const FRAG = /* glsl */ `
 precision highp float;
 uniform float uTime;
-uniform vec4 uWaves[${MAX_WAVES}]; // x: t0, y: amp, z: speed, w: życie (0.8-2.6 s)
+uniform vec4 uWaves[${MAX_WAVES}]; // x: t0, y: amp, z: speed, w: życie (2.6-6.0 s)
 uniform vec3 uCorePos;      // pozycja sfery-serca (światło kluczowe)
 uniform float uCoreGlow;    // energia sfery 0..~1.2
 uniform float uPulse;       // beatPulse 0..1
@@ -54,23 +54,23 @@ void main() {
   float ang = atan(vWorld.z, vWorld.x);
   float crest = 0.0;
   float gx = 0.0, gz = 0.0;
-  const float K = 0.9;    // liczba falowa (λ ≈ 7 m)
-  const float SIG = 0.05; // szerokość otoczki — miękkie, jedwabne krawędzie
-  const float RHO = 0.03; // tłumienie radialne
+  const float K = 0.85;   // liczba falowa (λ ≈ 7.4 m) — drobne, jedwabne zmarszczki
+  const float SIG = 0.06; // szerokość otoczki — miękkie, jedwabne krawędzie
+  const float RHO = 0.010; // tłumienie radialne — fala żyje do krawędzi kadru
   for (int i = 0; i < ${MAX_WAVES}; i++) {
     float amp = uWaves[i].y;
     if (amp < 0.001) continue;
     float age = uTime - uWaves[i].x;
     float life = uWaves[i].w; // życie zależne od siły uderzenia
     if (age < 0.0 || age > life) continue;
-    float front = age * uWaves[i].z; // 7 m/s — zasięg rośnie z życiem fali
-    // lekka nieregularność azymutalna: pierścień nie jest cyrklem (naturalne, gładkie)
-    float wob = sin(ang * 3.0 + float(i) * 1.7 + age * 0.5) * 0.30
-              + sin(ang * 5.0 - age * 0.3 + float(i)) * 0.15;
+    float front = age * uWaves[i].z; // 9 m/s — zasięg do ~55 m (krawędź kadru)
+    // lekka nieregularność azymutalna (wspólna faza dla wszystkich fal — pierścienie
+    // są wtedy współśrodkowe jak zmarszczki na jedwabiu, a nie marmur z interferencji)
+    float wob = sin(ang * 3.0 + age * 0.5) * 0.20 + sin(ang * 5.0) * 0.08;
     float d = r - front - wob;
     float env = exp(-d * d * SIG)
-              * smoothstep(0.0, 0.08, age)
-              * (1.0 - smoothstep(life * 0.38, life, age))
+              * smoothstep(0.0, 0.10, age)
+              * (1.0 - smoothstep(life * 0.72, life, age))
               * exp(-r * RHO);
     float s = sin(d * K);
     crest += amp * max(s, 0.0) * env;
@@ -101,7 +101,8 @@ void main() {
   lit += uGoldBright * pool * 0.14;
 
   // złoty emissive na grzbietach fal — #d9984a, bez bieli (smoothstep per-piksel)
-  lit += uGold * smoothstep(0.02, 0.30, crest) * (0.18 + uCoreGlow * 0.24);
+  // próg 0.55, bo przy 3-4 nakładających się falach crest sumuje się do ~0.4
+  lit += uGold * smoothstep(0.06, 0.55, crest) * (0.14 + uCoreGlow * 0.16);
 
   lit = applyFog(lit, vDist);
   gl_FragColor = vec4(lit, 1.0);
@@ -138,10 +139,10 @@ export class Ground {
     this.mesh.frustumCulled = false;
   }
 
-  // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 7 m/s
-  pushWave(t0, amp, speed = 7, life = 2.6) {
+  // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 9 m/s
+  pushWave(t0, amp, speed = 9, life = 6.0) {
     const w = this.waves[this.waveI];
-    w.set(t0, Math.min(amp, 0.22), speed, Math.min(Math.max(life, 0.6), 2.6));
+    w.set(t0, Math.min(amp, 0.22), speed, Math.min(Math.max(life, 1.0), 8.0));
     this.waveI = (this.waveI + 1) % MAX_WAVES;
   }
 
