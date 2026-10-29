@@ -22,10 +22,10 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 
 | plik | rola |
 |---|---|
-| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **fala + puls sfery tylko z uderzeń w stem "bebny"** (onsety, siła ≥ 0.35, oddech 0.6 s); iskierki błyskają na każdym onsetcie |
+| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **fala + puls sfery na KAŻDYM uderzeniu w stem "bebny"** (onsety, siła ≥ 0.35, dedupe 0.1 s; życie fali rośnie z siłą); iskierki błyskają na każdym onsetcie |
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch; `sampleAt` (interpolacja klatek), `EventCursor` (beaty/onsety) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
-| `ground.js` | ziemia: gładka baza FBM + kolejka **max 4 fal** od beatów (blackout 700 ms, amp ≤ 0.22, 7 m/s, `sin(d·0.9)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), lekka nieregularność azymutalna; zasięg ~18 m, życie 2.6 s, miękkie wygasanie 1.0-2.6 s; matowe oświetlenie, owalna sadzawka |
+| `ground.js` | ziemia: gładka baza FBM + kolejka **max 10 fal** (1 mocny bit = 1 fala, amp ≤ 0.22, 7 m/s, życie 1.0-2.6 s zależne od siły, `sin(d·0.9)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), lekka nieregularność azymutalna; miękkie wygasanie od 38% życia; matowe oświetlenie, owalna sadzawka |
 | `core.js` | sfera-żar (r=0.9, y=0.3 wkopana): emissive 0.5+1.2·en+0.3·bp (cap 1.35, tanh-sufit), bursztyn #7a3000→#ffcf8a; halo sprite; PointLight 6+18·energy |
 | `ribbon.js` | wstęga wokalu: sztywna deska x ±80 na y=9, z=-28 (daleko za sferą); szerokość z RMSslow (0.3-3.3 m), jasność z RMSfast, kontur z pitch ±1.2 m; 3 warstwy additive, zero fbm w alpha |
 | `mountains.js` | 3 warstwy gór (ridged FBM) jako sylwetki w mgle (z=170/235/310) |

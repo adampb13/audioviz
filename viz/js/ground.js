@@ -1,9 +1,9 @@
-// System 1: ZIEMIA — ciemna, pomarszczona pustynia z koncentrycznymi falami od beatów.
-// Audit P0-2: max 3 fale (gwarancja sprzętowa), 1 bit = 1 fala: wolna, długa, niska.
+// System 1: ZIEMIA — ciemna, pomarszczona pustynia z koncentrycznymi falami od uderzeń bębnów.
+// 1 mocny bit = 1 fala (max 10 slotów); fala liczona per-piksel, życie skaluje się z siłą.
 import * as THREE from "three";
 import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
 
-const MAX_WAVES = 4; // blackout 700 ms × życie 2.6 s => 3-4 czytelne pierścienie naraz
+const MAX_WAVES = 10; // każdy mocny bit ma własną falę (życie 1.0-2.6 s zależnie od siły)
 
 const VERT = /* glsl */ `
 uniform float uTime;
@@ -61,7 +61,8 @@ void main() {
     float amp = uWaves[i].y;
     if (amp < 0.001) continue;
     float age = uTime - uWaves[i].x;
-    if (age < 0.0 || age > 2.7) continue; // po 2.6 s fala jest już wygaszona
+    float life = uWaves[i].w; // życie zależne od siły uderzenia
+    if (age < 0.0 || age > life) continue;
     float front = age * uWaves[i].z; // 7 m/s — zasięg rośnie z życiem fali
     // lekka nieregularność azymutalna: pierścień nie jest cyrklem (naturalne, gładkie)
     float wob = sin(ang * 3.0 + float(i) * 1.7 + age * 0.5) * 0.30
@@ -69,7 +70,7 @@ void main() {
     float d = r - front - wob;
     float env = exp(-d * d * SIG)
               * smoothstep(0.0, 0.08, age)
-              * (1.0 - smoothstep(1.0, 2.6, age))
+              * (1.0 - smoothstep(life * 0.38, life, age))
               * exp(-r * RHO);
     float s = sin(d * K);
     crest += amp * max(s, 0.0) * env;
@@ -138,9 +139,9 @@ export class Ground {
   }
 
   // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 7 m/s
-  pushWave(t0, amp, speed = 7) {
+  pushWave(t0, amp, speed = 7, life = 2.6) {
     const w = this.waves[this.waveI];
-    w.set(t0, Math.min(amp, 0.22), speed, 0);
+    w.set(t0, Math.min(amp, 0.22), speed, Math.min(Math.max(life, 0.6), 2.6));
     this.waveI = (this.waveI + 1) % MAX_WAVES;
   }
 

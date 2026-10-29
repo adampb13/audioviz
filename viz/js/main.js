@@ -194,9 +194,11 @@ function frame() {
     atmosphere.ignite(s); // iskierki: tylko błysk
     S.onsetsFired++;
     if (s < 0.35) return;              // słabe uderzenia (ghost notes) nie robią fali
-    if (t - lastWaveT < 0.6) return;   // oddech między pierścieniami
+    if (t - lastWaveT < 0.1) return;   // tylko dedupe — KAŻDE uderzenie ma swoją falę
     lastWaveT = t;
-    ground.pushWave(t, 0.12 + clamp(s, 0, 1) * 0.1, 7); // amp ≤ 0.22
+    const sn = clamp(s, 0, 1);
+    // życie z siły: lekki ghost = krótki pierścień, akcent = długi (max 2.6 s)
+    ground.pushWave(t, 0.12 + sn * 0.1, 7, 1.0 + sn * 1.6); // amp ≤ 0.22
     S.wavesFired++;
     S.beatPulse = 1;                   // sfera pulsuje raz, na ten sam atak
   });
