@@ -3,7 +3,7 @@
 import * as THREE from "three";
 import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
 
-const MAX_WAVES = 2; // trzecia fala zabija najstarszą (audit v2 P0-A)
+const MAX_WAVES = 4; // blackout 700 ms × życie 2.6 s => 3-4 czytelne pierścienie naraz
 
 const VERT = /* glsl */ `
 uniform float uTime;
@@ -26,14 +26,14 @@ void main() {
     float amp = uWaves[i].y;
     if (amp < 0.001) continue;
     float age = uTime - uWaves[i].x;
-    if (age < 0.0) continue;
-    float front = age * uWaves[i].z; // 6 m/s — pierścień trzyma się okolic sfery
+    if (age < 0.0 || age > 2.7) continue; // po 2.6 s fala jest już wygaszona
+    float front = age * uWaves[i].z; // 7 m/s — zasięg rośnie z życiem fali
     float d = r - front;
-    // wąska otoczka + miękkie wejście i łagodne zanikanie (koniec przed nadpisaniem slotu)
+    // wąska otoczka (czytelne pojedyncze pierścienie) + długie, łagodne wygasanie
     float env = exp(-d * d * 0.10)
               * smoothstep(0.0, 0.08, age)
-              * (1.0 - smoothstep(0.55, 0.95, age))
-              * exp(-r * 0.05);
+              * (1.0 - smoothstep(1.0, 2.6, age))
+              * exp(-r * 0.03);
     float w = sin(d * 0.9);
     hw += amp * w * env;
     crest += amp * max(w, 0.0) * env;
@@ -122,8 +122,8 @@ export class Ground {
     this.mesh.frustumCulled = false;
   }
 
-  // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 6 m/s
-  pushWave(t0, amp, speed = 6) {
+  // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 7 m/s
+  pushWave(t0, amp, speed = 7) {
     const w = this.waves[this.waveI];
     w.set(t0, Math.min(amp, 0.22), speed, 0);
     this.waveI = (this.waveI + 1) % MAX_WAVES;

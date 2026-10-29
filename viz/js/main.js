@@ -193,10 +193,10 @@ function frame() {
 
   // triggery impulsowe — TYLKO zbocza beatów, debounce 350 ms (audit P0-6)
   const tryWave = (strength) => {
-    if (t - lastWaveT < 0.45) return; // blackout 450 ms (audit v2)
+    if (t - lastWaveT < 0.7) return; // blackout 700 ms — pierścienie nie zlewają się w kaszę
     lastWaveT = t;
     const bPeak = clamp(sampleAt(track.bPeak, track.fps, t) / track.bPeakP95, 0, 1);
-    ground.pushWave(t, 0.12 + bPeak * 0.1, 6); // onsets IGNORUJ dla ziemi
+    ground.pushWave(t, 0.12 + bPeak * 0.1, 7); // onsets IGNORUJ dla ziemi
     S.wavesFired++;
     return strength;
   };
