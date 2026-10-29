@@ -10,7 +10,7 @@ import { sampleAt, clamp, damp } from "./data.js";
 const SEGS = 256;    // segmenty wzdłuż X
 const ACROSS = 8;    // segmenty w poprzek (falloff krawędzi)
 const LAYERS = 3;
-const BASE_Y = 9.0;
+const BASE_Y = 4.2;  // niżej w kadrze: pasmo wisi tuż nad horyzontem, nie pod niebem
 const BASE_Z = -28.0;
 
 const VERT = /* glsl */ `
@@ -24,11 +24,24 @@ varying vec3 vWorld;
 void main() {
   vUv = uv;
   float x = position.x; // -80..80
-  float yBase = ${BASE_Y.toFixed(1)} + uPitchY;
-  yBase += sin(x * 0.15 + uTime * 0.4) * 0.35 * uVoiced;
-  yBase += (uLayer - 1.0) * 0.15;
+
+  // szerokość -> siła zagięć: nić między frazami jest prosta, pełne pasmo faluje mocno
+  // (wide 0..1 z uWidth 0.6..3.0 m; smoothstep, żeby przejście było ciągłe)
+  float wide = clamp((uWidth - 0.6) / 2.4, 0.0, 1.0);
+  wide = wide * wide * (3.0 - 2.0 * wide);
+  float bendAmp = (0.18 + 1.85 * wide) * uVoiced;   // pionowe wędrowanie pasma
+  float foldAmp = 2.6 * wide * uVoiced;             // zagięcia w głąb sceny (Z)
+
+  float yBase = ${BASE_Y.toFixed(1)} + uPitchY + (uLayer - 1.0) * 0.15;
+  yBase += sin(x * 0.13 + uTime * 0.35) * bendAmp;
+  yBase += sin(x * 0.29 - uTime * 0.22 + 1.7) * bendAmp * 0.42;
+
+  // zagięcia: pasmo podchodzi do kamery i odchodzi — jedwab marszczy się w głąb
+  float zFold = sin(x * 0.07 + uTime * 0.19) * foldAmp
+              + sin(x * 0.18 - uTime * 0.13 + 0.9) * foldAmp * 0.35;
+
   float y = yBase + (uv.y - 0.5) * uWidth;
-  vec4 wp = modelMatrix * vec4(x, y, 0.0, 1.0);
+  vec4 wp = modelMatrix * vec4(x, y, zFold, 1.0);
   vWorld = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
@@ -45,16 +58,23 @@ varying vec2 vUv;
 varying vec3 vWorld;
 void main() {
   // miękki falloff poprzeczny (szeroki jednolity rdzeń) + wygaśnięcie końców
-  float edge = smoothstep(0.0, 0.22, vUv.y) * smoothstep(1.0, 0.78, vUv.y);
-  edge *= smoothstep(0.0, 0.02, vUv.x) * smoothstep(1.0, 0.98, vUv.x);
+  // (1.0 - smoothstep) zamiast smoothstep z odwróconymi krawędziami — tamten jest
+  // niezdefiniowany w GLSL i potrafi dać NaN na sterownikach D3D
+  float edge = smoothstep(0.0, 0.22, vUv.y) * (1.0 - smoothstep(0.78, 1.0, vUv.y));
+  edge *= smoothstep(0.0, 0.02, vUv.x) * (1.0 - smoothstep(0.98, 1.0, vUv.x));
 
   // 5 cienkich podłużnych włókien połysku — gładkie, bez szumu
-  float fib = pow(abs(sin(vUv.y * 3.14159 * 5.0)), 24.0);
+  float fib = pow(clamp(abs(sin(vUv.y * 3.14159 * 5.0)), 0.0, 1.0), 24.0);
 
-  // pseudo-fresnel: krawędzie góra/dół łapią połysk
-  vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+  // pseudo-fresnel: krawędzie góra/dół łapią połysk.
+  // cross() z pochodnych może wyjść zerowy (pasmo widziane brzegiem) — wtedy
+  // normalize() daje NaN, a NaN w buforze HDR rozjeżdża się po mipach blooma
+  // w czarne, prostokątne bloki. Dlatego długość z guardem i clamp na podstawie pow().
+  vec3 Nraw = cross(dFdx(vWorld), dFdy(vWorld));
+  float Nlen = length(Nraw);
+  vec3 N = Nlen > 1e-9 ? Nraw / Nlen : vec3(0.0, 1.0, 0.0);
   vec3 V = normalize(cameraPosition - vWorld);
-  float fres = pow(1.0 - abs(dot(N, V)), 1.6);
+  float fres = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 1.6);
 
   vec3 tint = mix(uGold, uCream, clamp(uCent * 0.5, 0.0, 0.6));
   vec3 col = tint * uGlow * (0.8 + 0.35 * fib);
@@ -141,15 +161,20 @@ export class VocalRibbon {
     this.rmsSlow = damp(this.rmsSlow, rmsIn, 3.0, dt);
 
     // szerokość bazowa 2.5 m, modulacja tylko +/-1.0 m — bez pompowania
-    const width = 0.3 + this.voicedSmooth * (1.8 + this.rmsSlow * 1.2);
-    const pitchY = clamp((this.midiSmooth - 62.0) * 0.10, -1.2, 1.2);
-    const glow =
+    // guard: NaN/Inf w danych nie ma prawa trafić do vertex shadera (rozwala
+    // całą geometrię pasma w śmieci na ekranie)
+    const fin = (v, fb) => (Number.isFinite(v) ? v : fb);
+    const width = fin(0.3 + this.voicedSmooth * (1.8 + this.rmsSlow * 1.2), 0.3);
+    const pitchY = fin(clamp((this.midiSmooth - 62.0) * 0.10, -1.2, 1.2), 0.0);
+    const glow = fin(
       0.10 +
       0.45 * this.rmsFast * (0.30 + 0.70 * this.voicedSmooth) +
-      0.10 * this.voicedSmooth;
+      0.10 * this.voicedSmooth,
+      0.10
+    );
 
     for (const u of this.layerMats) {
-      u.uTime.value = t;
+      u.uTime.value = fin(t, 0);
       u.uWidth.value = width;
       u.uPitchY.value = pitchY;
       u.uVoiced.value = this.voicedSmooth;

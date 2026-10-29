@@ -32,7 +32,7 @@ varying vec3 vWorld;
 void main() {
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vWorld);
-  float fres = pow(1.0 - abs(dot(N, V)), 2.0);
+  float fres = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 2.0);
   // nigdy czysta biel: bursztyn #7a3000 -> #ffcf8a (audit v2 P1)
   vec3 deep = vec3(0.478, 0.188, 0.0);
   vec3 hot = mix(vec3(1.0, 0.812, 0.541), vec3(1.0, 0.85, 0.62), uHot * 0.3);

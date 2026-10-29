@@ -58,6 +58,16 @@ const GradeShader = {
       float g = hash(uv * vec2(1920.0, 1080.0) + fract(uTime) * 43.0) - 0.5;
       col += g * uGrain;
 
+      // Guard NaN/Inf na wyjściu kompozytu. NaN nie przechodzi ŻADNEGO porównania,
+      // więc test (x>0 || x<=0) wykrywa go w każdym kanale i zeruje tylko zepsuty
+      // kanał — inaczej NaN z bufora HDR rozjeżdża się po mipach blooma
+      // w mrugające, czarne prostokątne bloki.
+      col = vec3(
+        (col.r > 0.0 || col.r <= 0.0) ? clamp(col.r, 0.0, 64.0) : 0.0,
+        (col.g > 0.0 || col.g <= 0.0) ? clamp(col.g, 0.0, 64.0) : 0.0,
+        (col.b > 0.0 || col.b <= 0.0) ? clamp(col.b, 0.0, 64.0) : 0.0
+      );
+
       gl_FragColor = vec4(col, 1.0);
     }
   `,

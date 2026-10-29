@@ -29,11 +29,31 @@ window.addEventListener("unhandledrejection", (e) => {
 
 // ---------- renderer / scena / kamera ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Budżet pikseli: bufor rysowania + dwa render-targety kompozytora (half-float) rosną
+// z KWADRATEM pixelRatio. Na ekranie 4K przy DPR 2 to ~33 mln px → ~800 MB VRAM,
+// czyli realne ryzyko utraty kontekstu GPU i mrugających czarnych prostokątów.
+// Dlatego tniemy DPR tak, by bufor nie przekraczał ~9 mln px (≈4K).
+const MAX_BUF_PIXELS = 9.0e6;
+function pixelRatioFor(w, h) {
+  const max = Math.min(window.devicePixelRatio || 1, 2);
+  // schodki 0.5 — wymiary bufora zostają całkowite (render-targety nie dostają
+  // ułamkowych szerokości, które GL i tak obcina)
+  for (let r = max; r >= 0.5; r -= 0.5) {
+    if (w * r * h * r <= MAX_BUF_PIXELS) return r;
+  }
+  return 0.5;
+}
+renderer.setPixelRatio(pixelRatioFor(window.innerWidth, window.innerHeight));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0; // animowane w pętli: 1.0 + energySmooth*0.35
 document.body.appendChild(renderer.domElement);
+
+// Utrata kontekstu GPU (sterownik/TDR/przeciążenie VRAM): three sam woła preventDefault,
+// ale render-targety kompozytora zostają ze starymi uchwytami → trzeba je odtworzyć,
+// inaczej obraz zostaje czarny do końca sesji.
+let ctxLost = 0;
+renderer.domElement.addEventListener("webglcontextlost", () => { ctxLost++; }, false);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(PAL.skyTop);
@@ -65,10 +85,24 @@ scene.add(atmosphere.group);
 
 const post = createPost(renderer, scene, camera);
 
+// Sonda QA (?debug): dostęp do obiektów sceny dla zrzutów, pomiarów i bisectowania
+if (params.has("debug")) {
+  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere };
+}
+
+// po utracie kontekstu render-targety trzeba zbudować od nowa
+renderer.domElement.addEventListener("webglcontextrestored", () => {
+  post.composer.reset();
+  errBox.hidden = true;
+  errBox.textContent = "";
+}, false);
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  renderer.setPixelRatio(pixelRatioFor(window.innerWidth, window.innerHeight));
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post.composer.setPixelRatio(renderer.getPixelRatio());
   post.composer.setSize(window.innerWidth, window.innerHeight);
 });
 
@@ -110,11 +144,16 @@ const hud = document.getElementById("hud");
 let playing = false;
 let demoMode = params.has("demo");
 let demoT = parseFloat(params.get("t") || "0") || 0;
+// Po pauzie zegar MUSI stać w miejscu. Wcześniej currentTime() wracał do demoT
+// (=0), więc pauza przewijała utwór na początek, a wznowienie grało od zera —
+// scena skakała (fale znikają, wstęga się resetuje).
+let pausedAt = null;
 
 function currentTime() {
   const m = masterAudio();
   if (!m) return demoT;
-  return playing ? m.currentTime : demoT;
+  if (playing) return m.currentTime;
+  return pausedAt !== null ? pausedAt : demoT;
 }
 
 async function setPlaying(p) {
@@ -131,8 +170,12 @@ async function setPlaying(p) {
     }
     playing = true;
     demoMode = false;
+    pausedAt = null;
+    resetCursors(t0); // kursor uderzeń staje tam, gdzie wznowiliśmy — bez salwy zaległych fal
     overlay.classList.add("hidden");
   } else {
+    // zapamiętaj pozycję PRZED pauzą, inaczej currentTime() nie ma czego zwrócić
+    pausedAt = els.length ? els[0].currentTime : demoT;
     for (const el of els) el.pause();
     playing = false;
     overlay.classList.remove("hidden");
@@ -142,6 +185,9 @@ async function setPlaying(p) {
 
 btn.addEventListener("click", () => setPlaying(true));
 window.addEventListener("keydown", (e) => {
+  // e.repeat: trzymana spacja potrafiła migać pauzą i wznawianiem (ciemna
+  // zasłona overlay włączała się i wyłączała kilkanaście razy na sekundę)
+  if (e.repeat) return;
   if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
   else if (e.code === "KeyH") { hud.hidden = !hud.hidden; }
 });
@@ -248,7 +294,7 @@ function frame() {
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, fps,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
-      track: TRACK,
+      ctxLost, track: TRACK,
     };
   }
 }

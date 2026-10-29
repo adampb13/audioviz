@@ -24,8 +24,8 @@ const FRAG = /* glsl */ `
   void main() {
     float ndv = clamp(dot(normalize(vN), normalize(vV)), 0.0, 1.0);
     // miękkie światło punktowe: jasne, małe centrum + szeroka, delikatna otoczka
-    float core = pow(ndv, 3.0);
-    float halo = pow(1.0 - ndv, 3.5) * 0.30;
+    float core = pow(clamp(ndv, 0.0, 1.0), 3.0);
+    float halo = pow(clamp(1.0 - ndv, 0.0, 1.0), 3.5) * 0.30;
     float g = (core + halo) * uBright;
     gl_FragColor = vec4(uColor * g, g);
   }`;

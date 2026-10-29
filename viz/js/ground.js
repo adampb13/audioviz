@@ -51,7 +51,8 @@ void main() {
   // fale jako pole wysokości liczone PER-PIKSEL: gładkie koncentryczne pierścienie
   // przy dowolnej rozdzielczości siatki (koniec z kanciastymi fasetami na trójkątach)
   float r = length(vWorld.xz);
-  float ang = atan(vWorld.z, vWorld.x);
+  // atan(0,0) jest niezdefiniowany — w centrum kadru dawał NaN i czarny piksel
+  float ang = r > 1e-4 ? atan(vWorld.z, vWorld.x) : 0.0;
   float crest = 0.0;
   float gx = 0.0, gz = 0.0;
   const float K = 0.85;   // liczba falowa (λ ≈ 7.4 m) — drobne, jedwabne zmarszczki
@@ -90,7 +91,10 @@ void main() {
   // światło sfery: matowe (roughness ~0.65) — ciasny zasięg, bez żółtej plamy
   float rCore = length(uCorePos.xz - vWorld.xz);
   float diff = max(dot(N, L), 0.0);
-  vec3 H = normalize(L + V);
+  // L + V zeruje się dokładnie na osi kamera-sfera — normalize(0) = NaN
+  vec3 hv = L + V;
+  float hlen = length(hv);
+  vec3 H = hlen > 1e-5 ? hv / hlen : N;
   float spec = pow(max(dot(N, H), 0.0), 24.0);
   float att = 1.0 / (1.0 + rCore * rCore * 0.02);
   vec3 lit = base * (0.20 + diff * att * (0.30 + uCoreGlow * 0.5));
@@ -141,13 +145,18 @@ export class Ground {
 
   // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 9 m/s
   pushWave(t0, amp, speed = 9, life = 6.0) {
+    // guard: NaN w polu fali zatrułby CAŁE pole (env -> NaN -> czarna ziemia do końca życia slotu)
+    if (!Number.isFinite(t0) || !Number.isFinite(amp)) return;
+    const a = Math.min(Math.max(amp, 0.02), 0.22);
+    const sp = Number.isFinite(speed) ? Math.min(Math.max(speed, 1), 20) : 9;
+    const lf = Number.isFinite(life) ? Math.min(Math.max(life, 1.0), 8.0) : 3.0;
     const w = this.waves[this.waveI];
-    w.set(t0, Math.min(amp, 0.22), speed, Math.min(Math.max(life, 1.0), 8.0));
+    w.set(t0, a, sp, lf);
     this.waveI = (this.waveI + 1) % MAX_WAVES;
   }
 
   update(t, energy, beatPulse) {
-    this.uniforms.uTime.value = t;
+    this.uniforms.uTime.value = Number.isFinite(t) ? t : 0;
     this.uniforms.uCoreGlow.value = energy;
     this.uniforms.uPulse.value = beatPulse;
   }

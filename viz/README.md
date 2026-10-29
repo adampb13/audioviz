@@ -27,10 +27,10 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
 | `ground.js` | ziemia: gładka baza FBM + kolejka **max 30 fal** (1 uderzenie = 1 fala, amp ≤ 0.22, 9 m/s, życie 2.6-6.0 s zależne od siły → zasięg 23-54 m, `sin(d·0.85)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), współśrodkowa (wspólna faza) nieregularność azymutalna; tłumienie radialne `exp(-r·0.010)` — pierścień dochodzi do krawędzi kadru, wygasanie od 72% życia; matowe oświetlenie, owalna sadzawka |
 | `core.js` | sfera-żar (r=0.9, y=0.3 wkopana): emissive 0.5+1.2·en+0.3·bp (cap 1.35, tanh-sufit), bursztyn #7a3000→#ffcf8a; halo sprite; PointLight 6+18·energy |
-| `ribbon.js` | wstęga wokalu: sztywna deska x ±80 na y=9, z=-28 (daleko za sferą); szerokość z RMSslow (0.3-3.3 m), jasność z RMSfast, kontur z pitch ±1.2 m; **brama frazy**: po dźwięcznej ramce pełna szerokość trzymana 0.9 s + peak-hold energii (τ 1.4 s), potem release λ=0.7 (τ≈1.4 s) — krótka pauza w śpiewie nie zwija wstęgi do zera; 3 warstwy additive, zero fbm w alpha |
+| `ribbon.js` | wstęga wokalu: sztywna deska x ±80 na y=4.2, z=-28 (nisko, tuż nad horyzontem, daleko za sferą); szerokość z RMSslow (0.3-3.3 m), jasność z RMSfast, kontur z pitch ±1.2 m; **zagięcia rosną z szerokością**: amplituda pionowa 0.18→2.03 m i wygięcia w głąb sceny (Z) 0→2.6 m skalują się z `uWidth` (nić jest prosta, pełne pasmo faluje), więc „poszerzanie" dosłownie tworzy większą falę; **brama frazy**: po dźwięcznej ramce pełna szerokość trzymana 0.9 s + peak-hold energii (τ 1.4 s), potem release λ=0.7 (τ≈1.4 s) — krótka pauza w śpiewie nie zwija wstęgi do zera; 3 warstwy additive, zero fbm w alpha |
 | `mountains.js` | 3 warstwy gór (ridged FBM) jako sylwetki w mgle (z=170/235/310) |
 | `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury), pył 250 drobin nisko (y≤4), 8 hero bokeh od onsetów |
-| `postfx.js` | RenderPass → UnrealBloom → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES) |
+| `postfx.js` | RenderPass → UnrealBloom → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
 
 ## Mapowanie danych → efekt
 
@@ -79,3 +79,25 @@ paleta 8 kolorów vs. referencja. Progi akceptacji (audyt): **clip% < 1%**
 **tris < 800k**, **FPS p95 > 55**. Aktualnie: clip 0.00%, ~19 draw calls sceny
 (33-34 z passami), 277k tris, p95 ~140 fps.
 Referencja: `C:\Users\adamp\Downloads\Gemini_Generated_Image_q3xo6hq3xo6hq3xo.jpg`.
+
+## Odporność obrazu (artefakty)
+
+Mrugające czarne prostokąty mają w tej scenie trzy realne źródła — wszystkie
+załatane, bo każdy z nich potrafi zabić cały kadr:
+
+1. **NaN w shaderze** — `pow(x, y)` z `x < 0` (`1.0 - abs(dot(N,V))` potrafi zejść
+   pod zero o 1e-7) i `normalize()` zerowego wektora (`cross(dFdx, dFdy)` gdy pasmo
+   jest widziane brzegiem, `atan(0,0)` w środku ziemi, `L + V` na osi kamera-sfera).
+   NaN w buforze HDR nie kończy się jednym pikselem: rozchodzi się po mipach blooma
+   i wraca jako **prostokątny czarny blok**, który „mruga", bo zależy od ruchu pasma.
+   Wszystkie podstawy `pow` mają `clamp`, wszystkie `normalize` guard na długości,
+   a `postfx.js` zeruje NaN/Inf na wyjściu kompozytu.
+2. **Odwrócone `smoothstep(1.0, 0.78, x)`** — w GLSL niezdefiniowane (edge0 > edge1);
+   zamienione na `1.0 - smoothstep(0.78, 1.0, x)`.
+3. **Utrata kontekstu GPU / VRAM** — `pixelRatio` 2 na ekranie 4K to 33 mln px
+   w buforze i dwa render-targety half-float (~800 MB). Stąd budżet `MAX_BUF_PIXELS`
+   ≈ 9 mln px (schodki 0.5) i `webglcontextrestored` → `composer.reset()`.
+   Diagnostyka: `window.__viz.ctxLost` (0 = kontekst nigdy nie padł) oraz `?debug`,
+   które wystawia `window.__dbg = {renderer, scene, camera, post, ground, core,
+   ribbon, mountains, atmosphere}` — można wtedy schować obiekt i sprawdzić, czy
+   artefakt znika (bisect zamiast zgadywania).

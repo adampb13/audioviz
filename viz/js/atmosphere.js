@@ -64,7 +64,9 @@ uniform vec3 uColor;
 varying float vA;
 void main() {
   vec2 c = gl_PointCoord - 0.5;
-  float d = smoothstep(0.5, 0.05, length(c));
+  // 1.0 - smoothstep zamiast smoothstep(0.5, 0.05, ...): odwrócone krawędzie
+  // są w GLSL niezdefiniowane i mogą dać NaN (a ten szerzy się po bloomie)
+  float d = 1.0 - smoothstep(0.05, 0.5, length(c));
   gl_FragColor = vec4(uColor, d * vA);
 }
 `;
