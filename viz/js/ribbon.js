@@ -1,22 +1,27 @@
 // System 3: WSTĘGA WOKALU — strumień jedwabiu, który LECI od prawej do lewej.
 //
-// Geometria jest sztywna (x -80..80, z=-28), ale KAŻDA KOLUMNA pokazuje wokal
+// Geometria jest sztywna (x -114..+30, z=-28), ale KAŻDA KOLUMNA pokazuje wokal
 // z innego momentu: bufor historii 256 próbek @20 Hz (okno 12.75 s) leci do
 // tekstury 256x1 (RGBA float) i jest próbkowany w vertex shaderze.
-//   R = pitch_midi  -> Y: melodia 1:1 (52..81 -> 0.6..15.0 m, 0.5 m na półton)
+//   R = pitch_midi  -> Y: melodia 1:1 (52..81 -> 1.6..18.0 m, 0.5 m na półton)
 //   G = szerokość [m] (rms_norm + brama frazy: 0.14 m laser .. 10 m pas)
 //   B = centroid 0..1 -> barwa: złoto (ciemny śpiew) -> krem -> biel (przegrzanie)
 //   A = wobble 0..1 (tempo_local_bpm x ruchliwość melodii) -> siła falowania
-// Przesunięcie w czasie jest ciągłe (uShift = ułamek texela), więc strumień płynie
-// gładko, a nie skokowo co 50 ms.
+// Przesunięcie w czasie jest ciągłe (uShift = ufraction texela), więc strumień płynie
+// gładko, a nie skokowo co 50 ms. Głowa pasma (najnowsza próbka) leży W KADRZE
+// (x=+30) i rozpuszcza się w punkt przez taper — wstęga zaczyna się na ekranie.
 import * as THREE from "three";
 import { PAL } from "./glsl.js";
 import { sampleAt, clamp, damp } from "./data.js";
 
-const SEGS = 320;      // segmenty wzdłuż X (~0.5 m na segment)
+const SEGS = 320;      // segmenty wzdłuż X (~0.45 m na segment)
 const ACROSS = 8;      // segmenty w poprzek (falloff krawędzi)
 const LAYERS = 3;
 const BASE_Z = -28.0;
+
+const X_LEN = 144.0;   // długość pasma w świecie
+const HEAD_X = 30.0;   // x głowy (najnowsza próbka) — wewnątrz kadru (±46)
+const TAPER = 0.13;    // 13% długości (≈19 m, ~1.7 s) rozpuszczania się końcówki
 
 const HIST_N = 256;
 const HIST_STEP = 0.05;                  // 20 Hz
@@ -45,6 +50,7 @@ varying vec3 vWorld;
 varying float vCen;
 varying float vWob;
 varying float vWidth;
+varying float vTaper;
 
 // u = 0 -> najstarsza próbka (lewa krawędź), u = 1 -> teraz (prawa krawędź)
 vec4 histAt(float u) {
@@ -68,20 +74,27 @@ void main() {
   float wob = S.a;
   vCen = cen;
   vWob = wob;
-  vWidth = width;
+
+  // 0. taper głowy: pasmo rozpuszcza się w punkt, z którego wypływa (smoothstep).
+  //    Obejmuje szerokość, falowanie i jasność — inaczej końcówka to ucięta rura.
+  float tp = clamp((1.0 - uv.x) / ${TAPER.toFixed(3)}, 0.0, 1.0);
+  float taper = tp * tp * (3.0 - 2.0 * tp);
+  vTaper = taper;
+  float wT = width * taper;
+  vWidth = wT;
 
   // 1. melodia: Y wprost z pitch_midi (niskie partie schodzą, falset unosi)
   float yMel = ${Y_LO.toFixed(2)} + (clamp(pitch, ${PITCH_LO.toFixed(1)}, ${PITCH_HI.toFixed(1)}) - ${PITCH_LO.toFixed(1)}) * ${Y_PER_SEMI.toFixed(4)};
 
   // 2. falowanie: drobna fala w Y (melodia zostaje czytelna) + duże marszczenie w Z
-  float wn = clamp(width / ${W_MAX.toFixed(1)}, 0.0, 1.0);
+  float wn = clamp(wT / ${W_MAX.toFixed(1)}, 0.0, 1.0);
   float ripple = sin(x * 0.50 + uPhaseY) * (0.05 + 0.22 * wob);
-  float fold = sin(x * 0.10 + uPhaseZ) * (0.35 + 1.70 * wn) * wob
-             + sin(x * 0.25 - uPhaseZ * 1.3 + 0.9) * (0.15 + 0.80 * wn) * wob;
+  float fold = (sin(x * 0.10 + uPhaseZ) * (0.35 + 1.70 * wn) * wob
+             + sin(x * 0.25 - uPhaseZ * 1.3 + 0.9) * (0.15 + 0.80 * wn) * wob) * taper;
 
   // 3. przekrój: grubość = głośność; warstwy rozsuwają się proporcjonalnie
   float h = uv.y - 0.5;
-  float y = yMel + ripple + h * width + (uLayer - 1.0) * width * 0.10;
+  float y = yMel + ripple * taper + h * wT + (uLayer - 1.0) * wT * 0.10;
 
   vec4 wp = modelMatrix * vec4(x, y, fold, 1.0);
   vWorld = wp.xyz;
@@ -100,6 +113,7 @@ varying vec3 vWorld;
 varying float vCen;
 varying float vWob;
 varying float vWidth;
+varying float vTaper;
 void main() {
   // miękki falloff poprzeczny + wygaśnięcie obu końców pasma
   // (1.0 - smoothstep) zamiast smoothstep z odwróconymi krawędziami — tamten jest
@@ -128,16 +142,17 @@ void main() {
   float wn = clamp(vWidth / ${W_MAX.toFixed(1)}, 0.0, 1.0);
   // baza 0.02: w ciszy wstęgi po prostu nie ma (0.12 zostawiało cienką jasną
   // linię na linii horyzontu, czytaną jak artefakt)
-  float alpha = edge * (0.02 + 0.98 * uVoiced) * uLayerAlpha * mix(0.62, 0.50, wn);
+  float alpha = edge * (0.02 + 0.98 * uVoiced) * uLayerAlpha * mix(0.62, 0.50, wn) * vTaper;
   gl_FragColor = vec4(col, alpha);
 }
 `;
 
 export class VocalRibbon {
   constructor() {
-    const geo = new THREE.PlaneGeometry(160, 1, SEGS - 1, ACROSS - 1);
+    const geo = new THREE.PlaneGeometry(X_LEN, 1, SEGS - 1, ACROSS - 1);
     this.group = new THREE.Group();
-    this.group.position.set(0, 0, BASE_Z); // daleko za sferą
+    // głowa pasma (uv.x = 1) wypada w x = HEAD_X, czyli WEWNĄTRZ kadru
+    this.group.position.set(HEAD_X - X_LEN / 2, 0, BASE_Z);
 
     // bufor historii: R=pitch, G=width[m], B=centroid 0..1, A=wobble 0..1
     this.hist = new Float32Array(HIST_N * 4);
