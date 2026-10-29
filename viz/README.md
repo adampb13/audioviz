@@ -25,9 +25,9 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 | `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery |
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch; `sampleAt` (interpolacja klatek), `EventCursor` (beaty/onsety) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
-| `ground.js` | ziemia: zmarszczki FBM + kolejka **max 3 fal** `{t0, amp, speed}` od beatów (debounce 350 ms, amp ≤ 0.35, 7 m/s); złote grzbiety, sadzawka pod sferą |
-| `core.js` | sfera-żar (r=1.0, y=0.4 wpół w ziemi): energySmooth → jasność, beatPulse → skala/błysk; halo sprite; PointLight 8+25·energy |
-| `ribbon.js` | wstęga wokalu: kurtyna 300×12 przez cały kadr (x ±70, y≈6), historia 2 s pitch/rms/prob + 80 ms lead; voiced gate (nić ↔ pasmo); 3 warstwy additive |
+| `ground.js` | ziemia: gładka baza FBM + kolejka **max 2 fal** od beatów (blackout 450 ms, amp ≤ 0.22, 6 m/s, sin(d·0.35)); matowe oświetlenie od sfery, owalna sadzawka |
+| `core.js` | sfera-żar (r=0.9, y=0.3 wkopana): emissive 0.5+1.2·en+0.3·bp (cap 1.35, tanh-sufit), bursztyn #7a3000→#ffcf8a; halo sprite; PointLight 6+18·energy |
+| `ribbon.js` | wstęga wokalu: sztywna deska x ±80 na y=9, z=-28 (daleko za sferą); szerokość z RMSslow (0.3-3.3 m), jasność z RMSfast, kontur z pitch ±1.2 m; 3 warstwy additive, zero fbm w alpha |
 | `mountains.js` | 3 warstwy gór (ridged FBM) jako sylwetki w mgle (z=170/235/310) |
 | `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury), pył 250 drobin nisko (y≤4), 8 hero bokeh od onsetów |
 | `postfx.js` | RenderPass → UnrealBloom → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES) |

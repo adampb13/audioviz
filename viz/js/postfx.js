@@ -13,7 +13,7 @@ const GradeShader = {
     uTime: { value: 0 },
     uCA: { value: 0.0012 },      // aberracja chromatyczna na obrzeżach
     uVig: { value: 0.34 },       // siła winiety
-    uGrain: { value: 0.035 },    // ziarno — dithering ukrywa banding nieba
+    uGrain: { value: 0.010 },    // ziarno: max 0.025 (audit v2) — ledwo wyczuwalne
     uLift: { value: 0.032 },     // podbicie cieni ku brązowej mgle (jak w referencji)
   },
   vertexShader: /* glsl */ `
@@ -70,7 +70,7 @@ export function createPost(renderer, scene, camera) {
   // bloom w liniowym HDR, przed tone mappingiem; progi chronią przed przepaleniem
   const size = renderer.getSize(new THREE.Vector2());
   // wysoki próg zabija paski; bloom tylko dla prawdziwie jasnych źródeł
-  const bloom = new UnrealBloomPass(size, 0.65, 0.7, 0.55);
+  const bloom = new UnrealBloomPass(size, 0.55, 0.75, 0.6);
   composer.addPass(bloom);
 
   const grade = new ShaderPass(GradeShader);

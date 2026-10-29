@@ -1,52 +1,34 @@
-// System 3: WSTĘGA WOKALU — jedwabna, świetlista wstęga sunąca przez środek kadru.
-// Historia pitch/rms/probe (~6 s) ląduje w DataTexture 300x1 — shader buduje z niej
-// pozycję Y (kontur melodii), szerokość i widoczność (voiced gate) każdego segmentu.
-// 3 warstwy additive z offsetami => efekt jedwabiu z obrazu referencyjnego.
+// System 3: WSTĘGA WOKALU — szeroka, pozioma rzeka jedwabiu DALEKO za sferą
+// (audit v2 P0-B: deska, nie trail). Sztywna geometria x -80..80, y=9, z=-28;
+// szerokość z wygładzonego RMSslow (max ~3.3 m), jasność z RMSfast, kontur Y
+// z pitch (płytko, +/-1.2 m). Zero fbm w alpha — jedwab to gładki gradient
+// + 5 cienkich podłużnych włókien połysku. Bez wokalu: nić 0.3 m, alpha 0.08.
 import * as THREE from "three";
-import { NOISE_GLSL, PAL } from "./glsl.js";
-import { sampleAt, clamp } from "./data.js";
+import { PAL } from "./glsl.js";
+import { sampleAt, clamp, damp } from "./data.js";
 
-const SEGS = 300;       // segmenty wzdłuż X
-const ACROSS = 12;      // segmenty w poprzek
-const TRAIL_S = 2.0;    // sekundy historii pitch na całej długości (bufor kształtu)
-const VOCAL_LEAD = 0.08; // kompensacja latencji — czytaj 80 ms wcześniej (audit P0-3)
+const SEGS = 256;    // segmenty wzdłuż X
+const ACROSS = 8;    // segmenty w poprzek (falloff krawędzi)
 const LAYERS = 3;
+const BASE_Y = 9.0;
+const BASE_Z = -28.0;
 
 const VERT = /* glsl */ `
-uniform sampler2D uTrail;
 uniform float uTime;
 uniform float uLayer;
+uniform float uWidth;   // stabilna szerokość pasma (m)
+uniform float uPitchY;  // (midiSmooth-62)*0.10, płytki kontur
+uniform float uVoiced;
 varying vec2 vUv;
-varying float vVoiced;
-varying float vRms;
-varying float vCent;
 varying vec3 vWorld;
-${NOISE_GLSL}
 void main() {
   vUv = uv;
-  vec4 tr = texture2D(uTrail, vec2(uv.x, 0.5));
-  float midi = tr.x;
-  float rms = tr.y;
-  float prob = tr.z;
-  float cent = tr.w;
-
-  float voiced = smoothstep(0.04, 0.28, prob);
-  float width = 0.15 + voiced * rms * 3.2; // nić 0.15 m bez wokalu, max ~3.3 m
-
-  // pionowa kurtyna twarzą do kamery: szerokość w osi Y, delikatne falowanie głębi w Z
-  float x = position.x; // -70..70
-  float yBase = 6.0 + (midi - 62.0) * 0.12;
-  yBase += sin(x * 0.25 + uTime * 0.8 + uLayer * 2.1) * 0.4 * voiced;
-  yBase += (uLayer - 1.0) * 0.22;
-
-  float y = yBase + (uv.y - 0.5) * width;
-  float z = snoise(vec3(x * 0.03, uTime * 0.12, uLayer * 3.0)) * 0.5 * voiced;
-  z += (uLayer - 1.0) * 0.4;
-
-  vVoiced = voiced;
-  vRms = rms;
-  vCent = cent;
-  vec4 wp = modelMatrix * vec4(x, y, z, 1.0);
+  float x = position.x; // -80..80
+  float yBase = ${BASE_Y.toFixed(1)} + uPitchY;
+  yBase += sin(x * 0.15 + uTime * 0.4) * 0.35 * uVoiced;
+  yBase += (uLayer - 1.0) * 0.15;
+  float y = yBase + (uv.y - 0.5) * uWidth;
+  vec4 wp = modelMatrix * vec4(x, y, 0.0, 1.0);
   vWorld = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
@@ -54,68 +36,53 @@ void main() {
 
 const FRAG = /* glsl */ `
 precision highp float;
-uniform float uTime;
-uniform float uLayer;
+uniform float uGlow;    // z RMSfast — jasność
+uniform float uVoiced;
+uniform float uCent;    // 0..1 — barwa bursztyn <-> krem
 uniform float uLayerAlpha;
 uniform vec3 uGold, uCream;
 varying vec2 vUv;
-varying float vVoiced;
-varying float vRms;
-varying float vCent;
 varying vec3 vWorld;
-${NOISE_GLSL}
 void main() {
-  // włókna jedwabiu: rozciągnięty wzdłuż X szum, dwie oktawy
-  float f1 = snoise(vec3(vUv.x * 160.0 - uTime * 0.5 + uLayer * 3.7, vUv.y * 4.0, uLayer));
-  float f2 = snoise(vec3(vUv.x * 420.0 - uTime * 0.9, vUv.y * 9.0 + uLayer * 13.0, 4.0));
-  float fibers = 0.72 + 0.20 * f1 + 0.10 * f2;
+  // miękki falloff poprzeczny (szeroki jednolity rdzeń) + wygaśnięcie końców
+  float edge = smoothstep(0.0, 0.22, vUv.y) * smoothstep(1.0, 0.78, vUv.y);
+  edge *= smoothstep(0.0, 0.02, vUv.x) * smoothstep(1.0, 0.98, vUv.x);
 
-  // miękki falloff na krawędziach góra/dół + wygaśnięcie na skrajnych końcach
-  float edge = smoothstep(0.0, 0.32, vUv.y) * smoothstep(1.0, 0.68, vUv.y);
-  edge *= smoothstep(0.0, 0.03, vUv.x) * smoothstep(1.0, 0.97, vUv.x);
+  // 5 cienkich podłużnych włókien połysku — gładkie, bez szumu
+  float fib = pow(abs(sin(vUv.y * 3.14159 * 5.0)), 24.0);
 
-  // pseudo-fresnel z pochodnych — krawędzie świecą mocniej (poczucie objętości)
+  // pseudo-fresnel: krawędzie góra/dół łapią połysk
   vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
   vec3 V = normalize(cameraPosition - vWorld);
   float fres = pow(1.0 - abs(dot(N, V)), 1.6);
 
-  vec3 tint = mix(uGold, uCream, clamp(0.10 + vCent * 0.35 + vRms * 0.2, 0.0, 1.0));
-  // podłoga złotej obecności przy voiced — wstęga nigdy nie jest szarą smugą
-  float glow = 0.10 + 0.45 * vRms * (0.30 + 0.70 * vVoiced) + 0.10 * vVoiced;
-  vec3 col = tint * glow * fibers;
-  col += uCream * fres * 0.12 * (0.2 + 0.8 * vVoiced);
-  // nić między frazami: cienka, ale obecna — oko widzi ciągłość wstęgi
-  col += uGold * (1.0 - vVoiced) * 0.08;
+  vec3 tint = mix(uGold, uCream, clamp(uCent * 0.5, 0.0, 0.6));
+  vec3 col = tint * uGlow * (0.8 + 0.35 * fib);
+  col += uCream * fres * 0.10 * (0.2 + 0.8 * uVoiced);
+  col += uGold * (1.0 - uVoiced) * 0.15; // nić między frazami — cienka, ale widoczna
 
-  float alpha = edge * (0.06 + 0.94 * vVoiced) * uLayerAlpha;
+  // bez wokalu: nić alpha 0.08 — nie znika, nie wskakuje
+  float alpha = edge * (0.08 + 0.92 * uVoiced) * uLayerAlpha;
   gl_FragColor = vec4(col, alpha);
 }
 `;
 
 export class VocalRibbon {
   constructor() {
-    const geo = new THREE.PlaneGeometry(140, 1, SEGS - 1, ACROSS - 1);
-
-    this.trailData = new Float32Array(SEGS * 4);
-    this.trailTex = new THREE.DataTexture(
-      this.trailData, SEGS, 1, THREE.RGBAFormat, THREE.FloatType
-    );
-    this.trailTex.magFilter = THREE.LinearFilter;
-    this.trailTex.minFilter = THREE.LinearFilter;
-    this.trailTex.wrapS = THREE.ClampToEdgeWrapping;
-    this.trailTex.needsUpdate = true;
-
+    const geo = new THREE.PlaneGeometry(160, 1, SEGS - 1, ACROSS - 1);
     this.group = new THREE.Group();
-    // przesunięcie w stronę kamery — powierzchnia wstęgi staje się czytelna,
-    // a nie spłaszczona do kreski na skrajnym kącie wzroku
-    this.group.position.set(0, 0, 8);
+    this.group.position.set(0, 0, BASE_Z); // daleko za sferą, nad horyzontem
     this.layerMats = [];
     const alphaByLayer = [0.30, 0.55, 0.30];
     for (let l = 0; l < LAYERS; l++) {
       const uniforms = {
-        uTrail: { value: this.trailTex },
         uTime: { value: 0 },
         uLayer: { value: l },
+        uWidth: { value: 0.3 },
+        uPitchY: { value: 0 },
+        uVoiced: { value: 0 },
+        uGlow: { value: 0.1 },
+        uCent: { value: 0.3 },
         uLayerAlpha: { value: alphaByLayer[l] },
         uGold: { value: new THREE.Color(PAL.gold) },
         uCream: { value: new THREE.Color(PAL.cream) },
@@ -132,27 +99,48 @@ export class VocalRibbon {
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.frustumCulled = false;
-      mesh.rotation.x = -0.30; // lekkie pochylenie ku kamerze — czuć grubość jedwabiu
       mesh.renderOrder = 10 + l;
       this.group.add(mesh);
-      this.layerMats.push({ mat, uniforms });
+      this.layerMats.push(uniforms);
     }
+    // wygładzenia (audit v2): szerokość tylko z RMSslow, jasność z RMSfast
+    this.midiSmooth = 62;
+    this.voicedSmooth = 0;
+    this.rmsFast = 0;
+    this.rmsSlow = 0;
   }
 
-  // Próbkowanie historii prosto z analysis (linearna interpolacja klatek) —
-  // głowa (prawa krawędź) = teraz + VOCAL_LEAD, lewa = przeszłość.
-  update(t, track) {
-    const d = this.trailData;
-    for (let i = 0; i < SEGS; i++) {
-      const frac = i / (SEGS - 1);
-      const ts = t - (1 - frac) * TRAIL_S + VOCAL_LEAD;
-      const o = i * 4;
-      d[o] = sampleAt(track.vMidi, track.fps, Math.max(0, ts));
-      d[o + 1] = sampleAt(track.vRms, track.fps, Math.max(0, ts));
-      d[o + 2] = sampleAt(track.vProb, track.fps, Math.max(0, ts));
-      d[o + 3] = clamp(sampleAt(track.vCent, track.fps, Math.max(0, ts)) / track.vCentP95, 0, 1);
+  update(t, track, dt) {
+    const ts = t + 0.08; // lead 80 ms — kompensacja latencji
+    const midiT = sampleAt(track.vMidi, track.fps, ts);
+    const probT = sampleAt(track.vProb, track.fps, ts);
+    const rmsT = sampleAt(track.vRms, track.fps, ts);
+    const centT = clamp(sampleAt(track.vCent, track.fps, ts) / track.vCentP95, 0, 1);
+    const voicedT = Math.min(1, Math.max(0, (probT - 0.04) / 0.24)); // smoothstep 0.04..0.28
+
+    this.midiSmooth = damp(this.midiSmooth, midiT, 5.0, dt);
+    // voiced: attack 0.18, release 0.05 (alfa @60fps -> lambda)
+    this.voicedSmooth = damp(
+      this.voicedSmooth, voicedT, voicedT > this.voicedSmooth ? 12.0 : 3.0, dt
+    );
+    this.rmsFast = damp(this.rmsFast, rmsT, 12.0, dt);
+    this.rmsSlow = damp(this.rmsSlow, rmsT, 3.0, dt);
+
+    // szerokość bazowa 2.5 m, modulacja tylko +/-1.0 m — bez pompowania
+    const width = 0.3 + this.voicedSmooth * (1.8 + this.rmsSlow * 1.2);
+    const pitchY = clamp((this.midiSmooth - 62.0) * 0.10, -1.2, 1.2);
+    const glow =
+      0.10 +
+      0.45 * this.rmsFast * (0.30 + 0.70 * this.voicedSmooth) +
+      0.10 * this.voicedSmooth;
+
+    for (const u of this.layerMats) {
+      u.uTime.value = t;
+      u.uWidth.value = width;
+      u.uPitchY.value = pitchY;
+      u.uVoiced.value = this.voicedSmooth;
+      u.uGlow.value = glow;
+      u.uCent.value = centT;
     }
-    this.trailTex.needsUpdate = true;
-    for (const { uniforms } of this.layerMats) uniforms.uTime.value = t;
   }
 }

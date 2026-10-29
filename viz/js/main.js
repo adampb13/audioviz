@@ -15,7 +15,7 @@ import { createPost } from "./postfx.js";
 const params = new URLSearchParams(location.search);
 const TRACK = params.get("track") || "blindinglights";
 const AUDIO_DIR = `../data/${TRACK}/`;
-const FOG_DENSITY = 0.0085; // góry z=170..310 rozmyte do sylwetek we mgle (audit P1)
+const FOG_DENSITY = 0.009; // FogExp2 0x1a0f08, 0.009 (audit v2 P0-C)
 
 const errBox = document.getElementById("err");
 window.addEventListener("error", (e) => {
@@ -193,10 +193,10 @@ function frame() {
 
   // triggery impulsowe — TYLKO zbocza beatów, debounce 350 ms (audit P0-6)
   const tryWave = (strength) => {
-    if (t - lastWaveT < 0.35) return;
+    if (t - lastWaveT < 0.45) return; // blackout 450 ms (audit v2)
     lastWaveT = t;
     const bPeak = clamp(sampleAt(track.bPeak, track.fps, t) / track.bPeakP95, 0, 1);
-    ground.pushWave(t, 0.15 + bPeak * 0.2, 7);
+    ground.pushWave(t, 0.12 + bPeak * 0.1, 6); // onsets IGNORUJ dla ziemi
     S.wavesFired++;
     return strength;
   };
@@ -216,10 +216,10 @@ function frame() {
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
   core.update(t, S.energy, S.beatPulse, S.vRms * S.vProb, S.vCent);
-  ribbon.update(t, track);
+  ribbon.update(t, track, dt);
   atmosphere.update(t, dt, S.energy, S.tempo);
-  // pełny exposure tylko w szczycie energii (audit P0-1)
-  renderer.toneMappingExposure = 1.0 + S.energy * 0.35;
+  // pełny exposure tylko w piku (audit v2 P1)
+  renderer.toneMappingExposure = 1.05 + S.energy * 0.3;
 
   // kamera: powolny proceduralny drift
   const cd = t * 0.1;

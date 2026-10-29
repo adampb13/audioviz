@@ -3,7 +3,7 @@
 import * as THREE from "three";
 import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
 
-const MAX_WAVES = 3;
+const MAX_WAVES = 2; // trzecia fala zabija najstarszą (audit v2 P0-A)
 
 const VERT = /* glsl */ `
 uniform float uTime;
@@ -17,21 +17,20 @@ void main() {
   vec3 p = position; // geometria już obrócona: y w górę, xz to plan podłogi
   float r = length(p.xz);
 
-  // delikatne zmarszczki jedwabnego piasku — jedwab, nie tarka
-  float wr = fbm4(vec3(p.x * 0.05, uTime * 0.03, p.z * 0.05)) * 0.25;
-  wr += fbm4(vec3(p.x * 0.18, uTime * 0.02 + 7.0, p.z * 0.18)) * 0.04;
+  // baza całkowicie gładka (audit v2 P0-A): jedna oktawa, niska
+  float wr = fbm4(vec3(p.x * 0.03, uTime * 0.03, p.z * 0.03)) * 0.18;
 
-  // fale od beatów: 1 front, gładka, długa, niska
+  // fale od beatów: 1 front, wolny i szeroki, niski
   float hw = 0.0, crest = 0.0;
   for (int i = 0; i < ${MAX_WAVES}; i++) {
     float amp = uWaves[i].y;
     if (amp < 0.001) continue;
     float age = uTime - uWaves[i].x;
     if (age < 0.0) continue;
-    float front = age * uWaves[i].z; // 7 m/s
+    float front = age * uWaves[i].z; // 6 m/s, nie 12
     float d = r - front;
-    float env = exp(-d * d * 0.04) * exp(-age * 0.9) * exp(-r * 0.015);
-    float w = sin(d * 0.55);
+    float env = exp(-d * d * 0.02) * exp(-age * 0.7) * exp(-r * 0.012);
+    float w = sin(d * 0.35);
     hw += amp * w * env;
     crest += amp * max(w, 0.0) * env;
   }
@@ -68,14 +67,14 @@ void main() {
   float shade = clamp(0.5 + vWrinkle * 1.4, 0.0, 1.0);
   vec3 base = mix(uColLo, uColHi, shade * 0.55);
 
-  // światło sfery: diffuse + spec (matowa, odbija tylko sferę)
+  // światło sfery: matowe (roughness ~0.65) — ciasny zasięg, bez żółtej plamy
   float rCore = length(uCorePos.xz - vWorld.xz);
   float diff = max(dot(N, L), 0.0);
   vec3 H = normalize(L + V);
-  float spec = pow(max(dot(N, H), 0.0), 40.0);
-  float att = 1.0 / (1.0 + rCore * rCore * 0.004);
-  vec3 lit = base * (0.20 + diff * att * (0.45 + uCoreGlow * 0.8));
-  lit += uGold * spec * att * (0.15 + uCoreGlow * 0.35);
+  float spec = pow(max(dot(N, H), 0.0), 24.0);
+  float att = 1.0 / (1.0 + rCore * rCore * 0.02);
+  vec3 lit = base * (0.20 + diff * att * (0.30 + uCoreGlow * 0.5));
+  lit += uGold * spec * att * (0.06 + uCoreGlow * 0.10);
 
   // jasna sadzawka pod sferą (owalna poświata z obrazu referencyjnego)
   float pool = exp(-rCore * rCore * 0.05) * (0.10 + uCoreGlow * 0.30 + uPulse * 0.18);
@@ -119,10 +118,10 @@ export class Ground {
     this.mesh.frustumCulled = false;
   }
 
-  // t0 w czasie UTWORU; amp 0.15..0.35 MAX; speed jednostki/s frontu (7 m/s)
-  pushWave(t0, amp, speed = 7) {
+  // t0 w czasie UTWORU; amp 0.12..0.22 MAX, nigdy 0.6 (audit v2); 6 m/s
+  pushWave(t0, amp, speed = 6) {
     const w = this.waves[this.waveI];
-    w.set(t0, Math.min(amp, 0.35), speed, 0);
+    w.set(t0, Math.min(amp, 0.22), speed, 0);
     this.waveI = (this.waveI + 1) % MAX_WAVES;
   }
 
