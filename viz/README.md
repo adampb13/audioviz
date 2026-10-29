@@ -22,7 +22,7 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 
 | plik | rola |
 |---|---|
-| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery |
+| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **fala + puls sfery tylko z uderzeń w stem "bebny"** (onsety, siła ≥ 0.35, oddech 0.6 s); iskierki błyskają na każdym onsetcie |
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch; `sampleAt` (interpolacja klatek), `EventCursor` (beaty/onsety) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
 | `ground.js` | ziemia: gładka baza FBM + kolejka **max 4 fal** od beatów (blackout 700 ms, amp ≤ 0.22, 7 m/s, `sin(d·0.9)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), lekka nieregularność azymutalna; zasięg ~18 m, życie 2.6 s, miękkie wygasanie 1.0-2.6 s; matowe oświetlenie, owalna sadzawka |

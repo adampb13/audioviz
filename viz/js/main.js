@@ -84,12 +84,10 @@ for (const name of STEM_FILES) {
 const masterAudio = () => STEM_FILES.map((n) => audio[n]).find((el) => el && el.src);
 
 // ---------- zdarzenia (triggery impulsowe, bez interpolacji) ----------
-const beatDrums = new EventCursor(track.beatsDrums);
-const beatBass = new EventCursor(track.beatsBass);
+// Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
+// (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
 function resetCursors(t) {
-  beatDrums.reset(t);
-  beatBass.reset(t);
   onsets.reset(t);
 }
 
@@ -191,26 +189,16 @@ function frame() {
   S.energy = damp(S.energy, energyT, 2.0, dt);
   S.beatPulse *= Math.exp(-dt * 3.0);
 
-  // triggery impulsowe — TYLKO zbocza beatów, debounce 350 ms (audit P0-6)
-  const tryWave = (strength) => {
-    if (t - lastWaveT < 0.7) return; // blackout 700 ms — pierścienie nie zlewają się w kaszę
-    lastWaveT = t;
-    const bPeak = clamp(sampleAt(track.bPeak, track.fps, t) / track.bPeakP95, 0, 1);
-    ground.pushWave(t, 0.12 + bPeak * 0.1, 7); // onsets IGNORUJ dla ziemi
-    S.wavesFired++;
-    return strength;
-  };
-  beatDrums.poll(t, () => {
-    S.beatPulse = 1;
-    tryWave(1);
-  });
-  beatBass.poll(t, () => {
-    S.beatPulse = Math.max(S.beatPulse, 0.8);
-    tryWave(0.8);
-  });
+  // uderzenia w bębny: fala na ziemi + JEDEN puls sfery, nic więcej
   onsets.poll(t, (_t0, s) => {
-    atmosphere.ignite(s);
+    atmosphere.ignite(s); // iskierki: tylko błysk
     S.onsetsFired++;
+    if (s < 0.35) return;              // słabe uderzenia (ghost notes) nie robią fali
+    if (t - lastWaveT < 0.6) return;   // oddech między pierścieniami
+    lastWaveT = t;
+    ground.pushWave(t, 0.12 + clamp(s, 0, 1) * 0.1, 7); // amp ≤ 0.22
+    S.wavesFired++;
+    S.beatPulse = 1;                   // sfera pulsuje raz, na ten sam atak
   });
 
   // aktualizacje systemów
