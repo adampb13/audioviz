@@ -78,9 +78,10 @@ const core = new CoreSphere();
 scene.add(core.mesh);
 const ribbon = new VocalRibbon();
 scene.add(ribbon.group);
-const mountains = new Mountains(PAL.fog, FOG_DENSITY);
+const mountains = new Mountains(); // własna mgła per pasmo (nie scena FogExp2)
 scene.add(mountains.group);
 const atmosphere = new Atmosphere();
+atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
 
 const post = createPost(renderer, scene, camera);
@@ -104,6 +105,7 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   post.composer.setPixelRatio(renderer.getPixelRatio());
   post.composer.setSize(window.innerWidth, window.innerHeight);
+  atmosphere.setPixelRatio(renderer.getPixelRatio());
 });
 
 // ---------- audio: 4 stem-y, master clock = pierwszy obecny ----------

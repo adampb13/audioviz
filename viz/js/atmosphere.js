@@ -71,6 +71,46 @@ void main() {
 }
 `;
 
+// ---------- gwiazdy ----------
+// Statyczne drobiny na sferze o promieniu 430, wyłącznie nad panoramą gór
+// (elewacja 9..88°). Pozycje się nie ruszają — jedyny ruch to bardzo wolne
+// migotanie ±9%, które czyta się jako "żywa" gwiazda, nie jako dryf pyłu.
+const STAR_VERT = /* glsl */ `
+uniform float uTime;
+uniform float uScale;    // <pixelRatio>, żeby gwiazda miała stały rozmiar w CSS px
+uniform float uTwinkle;
+attribute float aSize;   // rozmiar w CSS px
+attribute float aBright;
+attribute float aPhase;
+attribute float aRate;
+attribute float aTint;
+varying float vA;
+varying float vTint;
+void main() {
+  vTint = aTint;
+  float tw = 1.0 - uTwinkle * (0.5 + 0.5 * sin(uTime * aRate + aPhase));
+  vA = aBright * tw;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_PointSize = max(1.0, aSize * uScale);
+  gl_Position = projectionMatrix * mv;
+}
+`;
+
+const STAR_FRAG = /* glsl */ `
+precision highp float;
+uniform vec3 uWarm, uCool;
+varying float vA;
+varying float vTint;
+void main() {
+  // UWAGA: gl_PointCoord dla sprite'a 2-3 px trafia w 0.25/0.75, czyli r≈0.35.
+  // Falloff smoothstep(0.18, 0.5) trzyma środek pełny dopiero od ~3 px; przy
+  // ciasnym smoothstep(0.0, 0.5) małe gwiazdy miały alpha ~5% i ich nie było.
+  float d = 1.0 - smoothstep(0.18, 0.5, length(gl_PointCoord - 0.5));
+  vec3 col = mix(uWarm, uCool, vTint);
+  gl_FragColor = vec4(col, d * vA);
+}
+`;
+
 // ---------- iskry (bokeh) ----------
 function sparkTexture() {
   const S = 128;
@@ -149,6 +189,66 @@ export class Atmosphere {
     dust.renderOrder = 20;
     this.group.add(dust);
 
+    // gwiazdy — statyczne drobiny na sferze R=430, nad panoramą. Azimut zawężony
+    // do sektora, który kamera faktycznie widzi (±65° od osi patrzenia), inaczej
+    // 90% gwiazd ląduje za plecami i niebo zostaje puste.
+    const NS = 320;
+    const sp = new Float32Array(NS * 3);
+    const sSize = new Float32Array(NS);
+    const sBright = new Float32Array(NS);
+    const sPhase = new Float32Array(NS);
+    const sRate = new Float32Array(NS);
+    const sTint = new Float32Array(NS);
+    const R = 430;
+    const A0 = -Math.PI / 2;                      // oś patrzenia = -Z
+    const ASPAN = THREE.MathUtils.degToRad(130);
+    for (let i = 0; i < NS; i++) {
+      // y = sin(elewacja) rozłożony równomiernie. Kadr pokazuje 0°..+37°, a góry
+      // zasłaniają pierwsze ~7° — więc gwiazdy wypełniają dokładnie 8..37°
+      // (rozrzucanie ich po całej kapsule do 79° marnowało połowę na niebo,
+      // którego kamera nigdy nie widzi).
+      const y = 0.14 + Math.random() * 0.46;
+      const rr = Math.sqrt(Math.max(0, 1 - y * y));
+      const a = A0 + (Math.random() - 0.5) * ASPAN;
+      sp[i * 3] = Math.cos(a) * rr * R;
+      sp[i * 3 + 1] = y * R;
+      sp[i * 3 + 2] = Math.sin(a) * rr * R;
+      const big = Math.pow(Math.random(), 5);       // tylko nieliczne duże
+      sSize[i] = 1.1 + big * 2.4;                   // CSS px
+      sBright[i] = 0.14 + Math.pow(Math.random(), 2.0) * 0.62;
+      sPhase[i] = Math.random() * 6.283;
+      sRate[i] = 0.10 + Math.random() * 0.35;       // migotanie 0.016..0.056 Hz
+      sTint[i] = Math.random();
+    }
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute("position", new THREE.BufferAttribute(sp, 3));
+    sg.setAttribute("aSize", new THREE.BufferAttribute(sSize, 1));
+    sg.setAttribute("aBright", new THREE.BufferAttribute(sBright, 1));
+    sg.setAttribute("aPhase", new THREE.BufferAttribute(sPhase, 1));
+    sg.setAttribute("aRate", new THREE.BufferAttribute(sRate, 1));
+    sg.setAttribute("aTint", new THREE.BufferAttribute(sTint, 1));
+    this.starU = {
+      uTime: { value: 0 },
+      uScale: { value: 1 },
+      uTwinkle: { value: 0.18 },
+      uWarm: { value: new THREE.Color(PAL.cream) },
+      uCool: { value: new THREE.Color(PAL.goldBright) },
+    };
+    const stars = new THREE.Points(
+      sg,
+      new THREE.ShaderMaterial({
+        vertexShader: STAR_VERT,
+        fragmentShader: STAR_FRAG,
+        uniforms: this.starU,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    stars.frustumCulled = false;
+    stars.renderOrder = 12;
+    this.group.add(stars);
+
     // iskry — sprite'y; puls zapalany onsetami bębnów
     const tex = sparkTexture();
     this.sparks = [];
@@ -176,6 +276,11 @@ export class Atmosphere {
     this.sparkI = 0;
   }
 
+  // rozmiar gwiazd w CSS px niezależnie od DPR bufora
+  setPixelRatio(r) {
+    this.starU.uScale.value = Math.min(Math.max(r, 1), 2);
+  }
+
   // siła onsetu 0.15..1 — zapala kolejną iskrę w karuzeli
   ignite(strength) {
     const s = this.sparks[this.sparkI];
@@ -187,6 +292,7 @@ export class Atmosphere {
     this.skyU.uTime.value = t * (tempoBpm / 120);
     this.dustU.uTime.value = t;
     this.dustU.uEnergy.value = energySmooth;
+    this.starU.uTime.value = t;
     for (const s of this.sparks) {
       s.pulse *= Math.exp(-dt * 2.2);
       const bob = Math.sin(t * 0.6 + s.phase) * 0.4;
