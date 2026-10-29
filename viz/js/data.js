@@ -103,6 +103,7 @@ export class Track {
     // bas
     this.bRms = toF32(b.rms_norm);
     this.bPeak = toF32(b.peak);
+    this.bPeakP95 = percentile(b.peak, 95) || 1;
     this.bCent = toF32(b.centroid_hz);
     this.bCentP95 = percentile(b.centroid_hz, 95) || 1;
 

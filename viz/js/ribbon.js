@@ -6,9 +6,10 @@ import * as THREE from "three";
 import { NOISE_GLSL, PAL } from "./glsl.js";
 import { sampleAt, clamp } from "./data.js";
 
-const SEGS = 300;      // segmenty wzdłuż X
-const ACROSS = 20;     // segmenty w poprzek
-const TRAIL_S = 6.0;   // sekundy historii na całej długości
+const SEGS = 300;       // segmenty wzdłuż X
+const ACROSS = 12;      // segmenty w poprzek
+const TRAIL_S = 2.0;    // sekundy historii pitch na całej długości (bufor kształtu)
+const VOCAL_LEAD = 0.08; // kompensacja latencji — czytaj 80 ms wcześniej (audit P0-3)
 const LAYERS = 3;
 
 const VERT = /* glsl */ `
@@ -30,17 +31,16 @@ void main() {
   float cent = tr.w;
 
   float voiced = smoothstep(0.04, 0.28, prob);
-  float width = mix(0.06, 6.5, voiced * (0.15 + 0.85 * rms));
+  float width = 0.15 + voiced * rms * 3.2; // nić 0.15 m bez wokalu, max ~3.3 m
 
-  // pionowa kurtyna twarzą do kamery: szerokość w osi Y, falowanie głębi w Z
-  float x = position.x; // -60..60
-  float yBase = 5.2 + (midi - 60.0) * 0.16;
-  yBase += sin(x * 0.10 + uTime * 0.5 + uLayer * 2.1) * 0.45 * (0.3 + 0.7 * voiced);
-  yBase += snoise(vec3(x * 0.05, uTime * 0.15, uLayer * 7.0)) * 0.55 * voiced;
+  // pionowa kurtyna twarzą do kamery: szerokość w osi Y, delikatne falowanie głębi w Z
+  float x = position.x; // -70..70
+  float yBase = 6.0 + (midi - 62.0) * 0.12;
+  yBase += sin(x * 0.25 + uTime * 0.8 + uLayer * 2.1) * 0.4 * voiced;
   yBase += (uLayer - 1.0) * 0.22;
 
   float y = yBase + (uv.y - 0.5) * width;
-  float z = snoise(vec3(x * 0.03, uTime * 0.12, uLayer * 3.0)) * 1.1 * (0.3 + 0.7 * voiced);
+  float z = snoise(vec3(x * 0.03, uTime * 0.12, uLayer * 3.0)) * 0.5 * voiced;
   z += (uLayer - 1.0) * 0.4;
 
   vVoiced = voiced;
@@ -79,21 +79,22 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorld);
   float fres = pow(1.0 - abs(dot(N, V)), 1.6);
 
-  vec3 tint = mix(uGold, uCream, clamp(0.15 + vCent * 0.5 + vRms * 0.25, 0.0, 1.0));
-  float glow = 0.10 + 0.55 * vRms * (0.30 + 0.70 * vVoiced);
+  vec3 tint = mix(uGold, uCream, clamp(0.10 + vCent * 0.35 + vRms * 0.2, 0.0, 1.0));
+  // podłoga złotej obecności przy voiced — wstęga nigdy nie jest szarą smugą
+  float glow = 0.10 + 0.45 * vRms * (0.30 + 0.70 * vVoiced) + 0.10 * vVoiced;
   vec3 col = tint * glow * fibers;
   col += uCream * fres * 0.12 * (0.2 + 0.8 * vVoiced);
   // nić między frazami: cienka, ale obecna — oko widzi ciągłość wstęgi
   col += uGold * (1.0 - vVoiced) * 0.08;
 
-  float alpha = edge * (0.09 + 0.91 * vVoiced) * uLayerAlpha;
+  float alpha = edge * (0.06 + 0.94 * vVoiced) * uLayerAlpha;
   gl_FragColor = vec4(col, alpha);
 }
 `;
 
 export class VocalRibbon {
   constructor() {
-    const geo = new THREE.PlaneGeometry(120, 1, SEGS - 1, ACROSS - 1);
+    const geo = new THREE.PlaneGeometry(140, 1, SEGS - 1, ACROSS - 1);
 
     this.trailData = new Float32Array(SEGS * 4);
     this.trailTex = new THREE.DataTexture(
@@ -139,12 +140,12 @@ export class VocalRibbon {
   }
 
   // Próbkowanie historii prosto z analysis (linearna interpolacja klatek) —
-  // głowa (prawa krawędź) = teraz, lewa = przeszłość.
+  // głowa (prawa krawędź) = teraz + VOCAL_LEAD, lewa = przeszłość.
   update(t, track) {
     const d = this.trailData;
     for (let i = 0; i < SEGS; i++) {
       const frac = i / (SEGS - 1);
-      const ts = t - (1 - frac) * TRAIL_S;
+      const ts = t - (1 - frac) * TRAIL_S + VOCAL_LEAD;
       const o = i * 4;
       d[o] = sampleAt(track.vMidi, track.fps, Math.max(0, ts));
       d[o + 1] = sampleAt(track.vRms, track.fps, Math.max(0, ts));

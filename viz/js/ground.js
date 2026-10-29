@@ -1,9 +1,9 @@
 // System 1: ZIEMIA — ciemna, pomarszczona pustynia z koncentrycznymi falami od beatów.
-// Fale: kolejka max 8 aktywnych { t0, amp, speed } w uniformach; pushWave tylko na zdarzenie.
+// Audit P0-2: max 3 fale (gwarancja sprzętowa), 1 bit = 1 fala: wolna, długa, niska.
 import * as THREE from "three";
 import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
 
-const MAX_WAVES = 8;
+const MAX_WAVES = 3;
 
 const VERT = /* glsl */ `
 uniform float uTime;
@@ -17,21 +17,21 @@ void main() {
   vec3 p = position; // geometria już obrócona: y w górę, xz to plan podłogi
   float r = length(p.xz);
 
-  // delikatne zmarszczki jedwabnego piasku
-  float wr = fbm4(vec3(p.x * 0.08, uTime * 0.05, p.z * 0.08)) * 0.4;
-  wr += fbm4(vec3(p.x * 0.35, uTime * 0.03 + 7.0, p.z * 0.35)) * 0.08;
+  // delikatne zmarszczki jedwabnego piasku — jedwab, nie tarka
+  float wr = fbm4(vec3(p.x * 0.05, uTime * 0.03, p.z * 0.05)) * 0.25;
+  wr += fbm4(vec3(p.x * 0.18, uTime * 0.02 + 7.0, p.z * 0.18)) * 0.04;
 
-  // fale od beatów
+  // fale od beatów: 1 front, gładka, długa, niska
   float hw = 0.0, crest = 0.0;
   for (int i = 0; i < ${MAX_WAVES}; i++) {
     float amp = uWaves[i].y;
     if (amp < 0.001) continue;
     float age = uTime - uWaves[i].x;
     if (age < 0.0) continue;
-    float front = age * uWaves[i].z;
+    float front = age * uWaves[i].z; // 7 m/s
     float d = r - front;
-    float env = exp(-d * d * 0.15) * exp(-age * 1.2) * exp(-r * 0.02);
-    float w = sin(d * 2.5);
+    float env = exp(-d * d * 0.04) * exp(-age * 0.9) * exp(-r * 0.015);
+    float w = sin(d * 0.55);
     hw += amp * w * env;
     crest += amp * max(w, 0.0) * env;
   }
@@ -68,21 +68,21 @@ void main() {
   float shade = clamp(0.5 + vWrinkle * 1.4, 0.0, 1.0);
   vec3 base = mix(uColLo, uColHi, shade * 0.55);
 
-  // światło sfery: diffuse + spec (mokry połysk)
+  // światło sfery: diffuse + spec (matowa, odbija tylko sferę)
   float rCore = length(uCorePos.xz - vWorld.xz);
   float diff = max(dot(N, L), 0.0);
   vec3 H = normalize(L + V);
-  float spec = pow(max(dot(N, H), 0.0), 60.0);
+  float spec = pow(max(dot(N, H), 0.0), 40.0);
   float att = 1.0 / (1.0 + rCore * rCore * 0.004);
   vec3 lit = base * (0.20 + diff * att * (0.45 + uCoreGlow * 0.8));
-  lit += uGold * spec * att * (0.20 + uCoreGlow * 0.55);
+  lit += uGold * spec * att * (0.15 + uCoreGlow * 0.35);
 
   // jasna sadzawka pod sferą (owalna poświata z obrazu referencyjnego)
-  float pool = exp(-rCore * rCore * 0.035) * (0.12 + uCoreGlow * 0.45 + uPulse * 0.25);
-  lit += uGoldBright * pool * 0.28;
+  float pool = exp(-rCore * rCore * 0.05) * (0.10 + uCoreGlow * 0.30 + uPulse * 0.18);
+  lit += uGoldBright * pool * 0.14;
 
-  // złoty emissive na grzbietach fal
-  lit += uGold * smoothstep(0.015, 0.22, vCrest) * (0.5 + uCoreGlow * 0.5);
+  // złoty emissive na grzbietach fal — #d9984a, bez bieli
+  lit += uGold * smoothstep(0.02, 0.18, vCrest) * (0.5 + uCoreGlow * 0.5);
 
   lit = applyFog(lit, vDist);
   gl_FragColor = vec4(lit, 1.0);
@@ -93,16 +93,16 @@ export class Ground {
   constructor(fogColor, fogDensity) {
     const geo = new THREE.PlaneGeometry(400, 400, 320, 320);
     geo.rotateX(-Math.PI / 2);
-    this.waves = Array.from({ length: MAX_WAVES }, () => new THREE.Vector4(0, 0, 12, 0));
+    this.waves = Array.from({ length: MAX_WAVES }, () => new THREE.Vector4(0, 0, 7, 0));
     this.waveI = 0;
     const c = (hex) => new THREE.Color(hex);
     this.uniforms = {
       uTime: { value: 0 },
       uWaves: { value: this.waves },
-      uCorePos: { value: new THREE.Vector3(0, 1.2, 0) },
+      uCorePos: { value: new THREE.Vector3(0, 0.4, 0) },
       uCoreGlow: { value: 0.4 },
       uPulse: { value: 0 },
-      uColLo: { value: c(PAL.groundLo) },
+      uColLo: { value: c(0x140c06) }, // baza #140c06 z auditu
       uColHi: { value: c(PAL.groundHi) },
       uGold: { value: c(PAL.gold) },
       uGoldBright: { value: c(PAL.goldBright) },
@@ -119,10 +119,10 @@ export class Ground {
     this.mesh.frustumCulled = false;
   }
 
-  // t0 w czasie UTWORU; amp ~0.35..1.0; speed jednostki/s frontu
-  pushWave(t0, amp, speed = 12) {
+  // t0 w czasie UTWORU; amp 0.15..0.35 MAX; speed jednostki/s frontu (7 m/s)
+  pushWave(t0, amp, speed = 7) {
     const w = this.waves[this.waveI];
-    w.set(t0, amp, speed, 0);
+    w.set(t0, Math.min(amp, 0.35), speed, 0);
     this.waveI = (this.waveI + 1) % MAX_WAVES;
   }
 

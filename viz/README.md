@@ -25,35 +25,40 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 | `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery |
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch; `sampleAt` (interpolacja klatek), `EventCursor` (beaty/onsety) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
-| `ground.js` | ziemia: zmarszczki FBM + kolejka 8 fal `{t0, amp, speed}` od beatów; złote grzbiety, sadzawka pod sferą |
-| `core.js` | sfera-serce: skala z basu + beatPulse, energia → jasność/nasycenie, wokal → marszczenie |
-| `ribbon.js` | wstęga wokalu: kurtyna 300×20, historia 6 s pitch/rms/prob w DataTexture; voiced gate (nić ↔ pełne pasmo); 3 warstwy additive |
-| `mountains.js` | 3 warstwy gór (ridged FBM) jako sylwetki w mgle |
-| `atmosphere.js` | kopuła nieba (gradient + chmury FBM w tempie utworu), pył 3000 (Points), 12 iskier od onsetów |
+| `ground.js` | ziemia: zmarszczki FBM + kolejka **max 3 fal** `{t0, amp, speed}` od beatów (debounce 350 ms, amp ≤ 0.35, 7 m/s); złote grzbiety, sadzawka pod sferą |
+| `core.js` | sfera-żar (r=1.0, y=0.4 wpół w ziemi): energySmooth → jasność, beatPulse → skala/błysk; halo sprite; PointLight 8+25·energy |
+| `ribbon.js` | wstęga wokalu: kurtyna 300×12 przez cały kadr (x ±70, y≈6), historia 2 s pitch/rms/prob + 80 ms lead; voiced gate (nić ↔ pasmo); 3 warstwy additive |
+| `mountains.js` | 3 warstwy gór (ridged FBM) jako sylwetki w mgle (z=170/235/310) |
+| `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury), pył 250 drobin nisko (y≤4), 8 hero bokeh od onsetów |
 | `postfx.js` | RenderPass → UnrealBloom → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES) |
 
 ## Mapowanie danych → efekt
 
 | dane (stemy po polsku) | efekt |
 |---|---|
-| `bebny.events.beats`, `bas.events.beats` | impuls: fala na ziemi + błysk sfery (`beatPulse`, wykładniczy zanik) |
+| `bebny.events.beats`, `bas.events.beats` | impuls: fala na ziemi (1 bit = 1 fala, debounce 350 ms) + błysk sfery (`beatPulse`) |
 | `bebny.events.onsets` (siła p95) | zapalenie kolejnej iskry-bokeh |
-| `bas.rms_norm` | skala sfery, kolor gorący |
+| `bas.rms_norm` | (przez `cross.energy`) energia → skala/jasność sfery |
 | `wokal.pitch_midi` (ffill) | kontur Y wstęgi |
 | `wokal.pitch_voiced_prob` | **voiced gate**: szerokość i widoczność wstęgi (nić ↔ pasmo) |
 | `wokal.rms_norm` | jasność/grubość wstęgi, marszczenie sfery |
-| `*.centroid_hz` (p95) | barwa wstęgi/sfery (bursztyn ↔ biało-złoty), migotanie pyłu |
+| `*.centroid_hz` (p95) | barwa wstęgi/sfery (bursztyn ↔ krem) |
 | `inne.tempo_local_bpm` | prędkość chmur na kopule |
-| `inne.rms_norm` + `bebny.peak` + bas | `energy` miksu → jasność sfery, światło na ziemi |
+| `cross.energy` | `energySmooth` (wolna, λ=2) → jasność sfery, światło na ziemi, alpha pyłu, exposure |
+| `bas.peak` (p95) | amplituda fali: 0.15 + peak·0.2 (max 0.35) |
 | `wokal.events.sections` | HUD (numer sekcji) |
 
 Zasady: wartości ciągłe — interpolacja klatek + wygładzanie wykładnicze
-(α=0.12 RMS, α=0.08 pitch @60 fps → `damp` z λ=7.7 / 5.0). Beaty/onsety — triggery,
-bez interpolacji. Wszystkie czasy w shaderach to czas utworu (pauza = stop efektów).
+(α=0.12 RMS, α=0.08 pitch @60 fps → `damp` z λ=7.7 / 5.0; wokal: atak 17.3,
+release 4.4). Beaty/onsety — triggery, bez interpolacji. Wszystkie czasy
+w shaderach to czas utworu (pauza = stop efektów).
 
 ## Pętla weryfikacyjna
 
 Przed „gotowe": `node --check viz/js/*.js`; przejazd po sekcjach w `?demo&t=`,
 kadr na sekcję + `#err` pusty + `window.__viz`; PIL: profil jasności wierszami,
-paleta 8 kolorów vs. referencja, udział pikseli przepalonych (>250) ≈ 0%, fps ≥ 60.
+paleta 8 kolorów vs. referencja. Progi akceptacji (audyt): **clip% < 1%**
+(piksele >250), **drawCalls < 25** (sama scena, bez passów bloom),
+**tris < 800k**, **FPS p95 > 55**. Aktualnie: clip 0.00%, ~19 draw calls sceny
+(33-34 z passami), 277k tris, p95 ~140 fps.
 Referencja: `C:\Users\adamp\Downloads\Gemini_Generated_Image_q3xo6hq3xo6hq3xo.jpg`.

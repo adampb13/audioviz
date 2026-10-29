@@ -15,7 +15,7 @@ import { createPost } from "./postfx.js";
 const params = new URLSearchParams(location.search);
 const TRACK = params.get("track") || "blindinglights";
 const AUDIO_DIR = `../data/${TRACK}/`;
-const FOG_DENSITY = 0.0075; // strojone tak, by góry z=150..280 zostały sylwetkami
+const FOG_DENSITY = 0.0085; // góry z=170..310 rozmyte do sylwetek we mgle (audit P1)
 
 const errBox = document.getElementById("err");
 window.addEventListener("error", (e) => {
@@ -32,7 +32,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "h
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.0; // animowane w pętli: 1.0 + energySmooth*0.35
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -100,6 +100,10 @@ const S = {
   dRms: 0, oRms: 0, oCent: 0, tempo: 120,
   energy: 0, beatPulse: 0, wavesFired: 0, onsetsFired: 0,
 };
+let lastWaveT = -10; // debounce fal (audit P0-6)
+// pomiary z checklisty: FPS p95 z bufora 240 klatek
+const fpsHist = new Float32Array(240);
+let fpsI = 0, fpsN = 0;
 
 // ---------- odtwarzanie ----------
 const btn = document.getElementById("start");
@@ -151,7 +155,9 @@ const clock = new THREE.Clock();
 let hudTimer = 0, fps = 60;
 window.__viz = {};
 
+renderer.info.autoReset = false; // ręczny reset — info liczy CAŁĄ klatkę (scena+passy)
 function frame() {
+  renderer.info.reset();
   const dt = Math.min(clock.getDelta(), 0.1);
   fps = fps * 0.95 + (dt > 0 ? 1 / dt : 60) * 0.05;
   if (demoMode) demoT += dt; // demo bez audio: własny zegar, ten sam kod próbkowania
@@ -170,8 +176,9 @@ function frame() {
   const tempoT = sampleAt(track.tempo, track.fps, t);
   const energyT = sampleAt(track.energy, track.fps, t);
 
-  S.vRms = damp(S.vRms, vRmsT, 7.7, dt);
-  S.vProb = damp(S.vProb, vProbT, 7.7, dt);
+  // wokal: szybki atak, wolne puszczanie — brak lagi, brak migotania (audit P0-3)
+  S.vRms = damp(S.vRms, vRmsT, vRmsT > S.vRms ? 17.3 : 4.4, dt);
+  S.vProb = damp(S.vProb, vProbT, vProbT > S.vProb ? 17.3 : 4.4, dt);
   S.vMidi = damp(S.vMidi, vMidiT, 5.0, dt);
   S.vCent = damp(S.vCent, vCentT, 5.0, dt);
   S.bRms = damp(S.bRms, bRmsT, 7.7, dt);
@@ -179,20 +186,27 @@ function frame() {
   S.dRms = damp(S.dRms, dRmsT, 7.7, dt);
   S.oRms = damp(S.oRms, oRmsT, 7.7, dt);
   S.oCent = damp(S.oCent, oCentT, 5.0, dt);
+  // energia robi światło (sfera/bloom/exposure), NIE robi fal — wolna (audit P0-6)
   S.tempo = damp(S.tempo, tempoT, 3.0, dt);
-  S.energy = damp(S.energy, energyT, 7.7, dt);
-  S.beatPulse *= Math.exp(-dt * 4.0);
+  S.energy = damp(S.energy, energyT, 2.0, dt);
+  S.beatPulse *= Math.exp(-dt * 3.0);
 
-  // triggery impulsowe
+  // triggery impulsowe — TYLKO zbocza beatów, debounce 350 ms (audit P0-6)
+  const tryWave = (strength) => {
+    if (t - lastWaveT < 0.35) return;
+    lastWaveT = t;
+    const bPeak = clamp(sampleAt(track.bPeak, track.fps, t) / track.bPeakP95, 0, 1);
+    ground.pushWave(t, 0.15 + bPeak * 0.2, 7);
+    S.wavesFired++;
+    return strength;
+  };
   beatDrums.poll(t, () => {
     S.beatPulse = 1;
-    ground.pushWave(t, 0.55 + 0.45 * S.dRms, 12);
-    S.wavesFired++;
+    tryWave(1);
   });
   beatBass.poll(t, () => {
     S.beatPulse = Math.max(S.beatPulse, 0.8);
-    ground.pushWave(t, 0.35 + 0.35 * S.bRms, 9);
-    S.wavesFired++;
+    tryWave(0.8);
   });
   onsets.poll(t, (_t0, s) => {
     atmosphere.ignite(s);
@@ -201,9 +215,11 @@ function frame() {
 
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
-  core.update(t, S.bRms, S.beatPulse, S.energy, S.vRms * S.vProb, S.vCent);
+  core.update(t, S.energy, S.beatPulse, S.vRms * S.vProb, S.vCent);
   ribbon.update(t, track);
-  atmosphere.update(t, dt, S.oCent, S.tempo);
+  atmosphere.update(t, dt, S.energy, S.tempo);
+  // pełny exposure tylko w szczycie energii (audit P0-1)
+  renderer.toneMappingExposure = 1.0 + S.energy * 0.35;
 
   // kamera: powolny proceduralny drift
   const cd = t * 0.1;
@@ -215,22 +231,32 @@ function frame() {
   post.grade.uniforms.uTime.value = t;
   post.composer.render();
 
+  // pomiary wydajności (checklist akceptacji)
+  fpsHist[fpsI] = dt > 0 ? 1 / dt : 60;
+  fpsI = (fpsI + 1) % fpsHist.length;
+  fpsN = Math.min(fpsN + 1, fpsHist.length);
+
   // HUD + sonda weryfikacyjna
   hudTimer += dt;
   if (hudTimer > 0.25) {
     hudTimer = 0;
     const sec = track.sectionAt(t);
+    const sorted = Array.from(fpsHist.subarray(0, fpsN)).sort((a, b) => a - b);
+    const fpsP95 = Math.round(sorted[Math.floor((fpsN - 1) * 0.05)] || 0); // dolne 5%
+    const calls = renderer.info.render.calls;
+    const tris = renderer.info.render.triangles;
     hud.textContent =
       `t ${t.toFixed(2)}  sec ${sec + 1}/${track.sections.length}  ` +
       `vR ${S.vRms.toFixed(2)} vP ${S.vProb.toFixed(2)} midi ${S.vMidi.toFixed(1)}  ` +
       `bR ${S.bRms.toFixed(2)} en ${S.energy.toFixed(2)} bp ${S.beatPulse.toFixed(2)}  ` +
-      `waves ${S.wavesFired}  fps ${fps.toFixed(0)}`;
+      `waves ${S.wavesFired}  p95 ${fpsP95}fps  dc ${calls}`;
     window.__viz = {
       t, section: sec, sections: track.sections.length,
       vRms: S.vRms, vProb: S.vProb, vMidi: S.vMidi, vCent: S.vCent,
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
       energy: S.energy, beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, fps,
+      fpsP95, calls, tris,
       track: TRACK,
     };
   }

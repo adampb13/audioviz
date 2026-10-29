@@ -43,9 +43,9 @@ export class Mountains {
   constructor(fogColor, fogDensity) {
     this.group = new THREE.Group();
     const layers = [
-      { z: -150, amp: 12, col: 0x150b05, seed: 1.7 },
-      { z: -200, amp: 18, col: 0x120903, seed: 4.3 },
-      { z: -280, amp: 26, col: 0x0e0703, seed: 8.9 },
+      { z: -170, amp: 7, col: 0x150b05, seed: 1.7 },
+      { z: -235, amp: 11, col: 0x120903, seed: 4.3 },
+      { z: -310, amp: 16, col: 0x0e0703, seed: 8.9 },
     ];
     for (const { z, amp, col, seed } of layers) {
       const geo = new THREE.PlaneGeometry(700, 60, 220, 24);
