@@ -27,10 +27,14 @@ void main() {
     if (amp < 0.001) continue;
     float age = uTime - uWaves[i].x;
     if (age < 0.0) continue;
-    float front = age * uWaves[i].z; // 6 m/s, nie 12
+    float front = age * uWaves[i].z; // 6 m/s — pierścień trzyma się okolic sfery
     float d = r - front;
-    float env = exp(-d * d * 0.02) * exp(-age * 0.7) * exp(-r * 0.012);
-    float w = sin(d * 0.35);
+    // wąska otoczka + miękkie wejście i łagodne zanikanie (koniec przed nadpisaniem slotu)
+    float env = exp(-d * d * 0.10)
+              * smoothstep(0.0, 0.08, age)
+              * (1.0 - smoothstep(0.55, 0.95, age))
+              * exp(-r * 0.05);
+    float w = sin(d * 0.9);
     hw += amp * w * env;
     crest += amp * max(w, 0.0) * env;
   }
