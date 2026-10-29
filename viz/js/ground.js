@@ -7,41 +7,26 @@ const MAX_WAVES = 4; // blackout 700 ms × życie 2.6 s => 3-4 czytelne pierści
 
 const VERT = /* glsl */ `
 uniform float uTime;
-uniform vec4 uWaves[${MAX_WAVES}]; // x: t0, y: amp, z: speed, w: seed
 varying vec3 vWorld;
-varying float vCrest;   // dodatni grzbiet fali (do emissive)
+varying vec3 vNormal;   // analityczna normalna bazy (fbm) — gładka, bez faset
 varying float vWrinkle; // zmarszczki bazowe (do cieniowania)
 varying float vDist;
 ${NOISE_GLSL}
 void main() {
   vec3 p = position; // geometria już obrócona: y w górę, xz to plan podłogi
-  float r = length(p.xz);
 
   // baza całkowicie gładka (audit v2 P0-A): jedna oktawa, niska
   float wr = fbm4(vec3(p.x * 0.03, uTime * 0.03, p.z * 0.03)) * 0.18;
 
-  // fale od beatów: 1 front, wolny i szeroki, niski
-  float hw = 0.0, crest = 0.0;
-  for (int i = 0; i < ${MAX_WAVES}; i++) {
-    float amp = uWaves[i].y;
-    if (amp < 0.001) continue;
-    float age = uTime - uWaves[i].x;
-    if (age < 0.0 || age > 2.7) continue; // po 2.6 s fala jest już wygaszona
-    float front = age * uWaves[i].z; // 7 m/s — zasięg rośnie z życiem fali
-    float d = r - front;
-    // wąska otoczka (czytelne pojedyncze pierścienie) + długie, łagodne wygasanie
-    float env = exp(-d * d * 0.10)
-              * smoothstep(0.0, 0.08, age)
-              * (1.0 - smoothstep(1.0, 2.6, age))
-              * exp(-r * 0.03);
-    float w = sin(d * 0.9);
-    hw += amp * w * env;
-    crest += amp * max(w, 0.0) * env;
-  }
+  // normalna bazy z pochodnej analitycznej (fbm jest niskoczęstotliwościowy —
+  // 4 tapy na wierzchołek wystarczą; zero faset z dFdx)
+  float e = 0.6;
+  float wx = fbm4(vec3((p.x + e) * 0.03, uTime * 0.03, p.z * 0.03)) * 0.18;
+  float wz = fbm4(vec3(p.x * 0.03, uTime * 0.03, (p.z + e) * 0.03)) * 0.18;
+  vNormal = normalize(vec3(-(wx - wr) / e, 1.0, -(wz - wr) / e));
 
-  p.y += wr + hw;
+  p.y += wr; // fale BEZ deformacji geometrii — liczone per-piksel w fragmencie
   vWrinkle = wr;
-  vCrest = crest;
   vec4 wp = modelMatrix * vec4(p, 1.0);
   vWorld = wp.xyz;
   vDist = length(wp.xyz - cameraPosition);
@@ -51,19 +36,49 @@ void main() {
 
 const FRAG = /* glsl */ `
 precision highp float;
+uniform float uTime;
+uniform vec4 uWaves[${MAX_WAVES}]; // x: t0, y: amp, z: speed, w: seed
 uniform vec3 uCorePos;      // pozycja sfery-serca (światło kluczowe)
 uniform float uCoreGlow;    // energia sfery 0..~1.2
 uniform float uPulse;       // beatPulse 0..1
 uniform vec3 uColLo, uColHi, uGold, uGoldBright;
 varying vec3 vWorld;
-varying float vCrest;
+varying vec3 vNormal;
 varying float vWrinkle;
 varying float vDist;
 ${FOG_GLSL}
 void main() {
-  // normalna z pochodnych ekranowych — zmarszczki łapią światło bez liczenia normalnych CPU
-  vec3 N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
-  if (N.y < 0.0) N = -N;
+  // fale jako pole wysokości liczone PER-PIKSEL: gładkie koncentryczne pierścienie
+  // przy dowolnej rozdzielczości siatki (koniec z kanciastymi fasetami na trójkątach)
+  float r = length(vWorld.xz);
+  float ang = atan(vWorld.z, vWorld.x);
+  float crest = 0.0;
+  float gx = 0.0, gz = 0.0;
+  const float K = 0.9;    // liczba falowa (λ ≈ 7 m)
+  const float SIG = 0.05; // szerokość otoczki — miękkie, jedwabne krawędzie
+  const float RHO = 0.03; // tłumienie radialne
+  for (int i = 0; i < ${MAX_WAVES}; i++) {
+    float amp = uWaves[i].y;
+    if (amp < 0.001) continue;
+    float age = uTime - uWaves[i].x;
+    if (age < 0.0 || age > 2.7) continue; // po 2.6 s fala jest już wygaszona
+    float front = age * uWaves[i].z; // 7 m/s — zasięg rośnie z życiem fali
+    // lekka nieregularność azymutalna: pierścień nie jest cyrklem (naturalne, gładkie)
+    float wob = sin(ang * 3.0 + float(i) * 1.7 + age * 0.5) * 0.30
+              + sin(ang * 5.0 - age * 0.3 + float(i)) * 0.15;
+    float d = r - front - wob;
+    float env = exp(-d * d * SIG)
+              * smoothstep(0.0, 0.08, age)
+              * (1.0 - smoothstep(1.0, 2.6, age))
+              * exp(-r * RHO);
+    float s = sin(d * K);
+    crest += amp * max(s, 0.0) * env;
+    // pochodna radialna dh/dr — nachylenie grzbietu do światła, bez udziału siatki
+    float dh = amp * env * (K * cos(d * K) - s * (2.0 * SIG * d + RHO));
+    gx += dh * vWorld.x / max(r, 1e-4);
+    gz += dh * vWorld.z / max(r, 1e-4);
+  }
+  vec3 N = normalize(vec3(vNormal.x - gx, vNormal.y, vNormal.z - gz));
   vec3 V = normalize(cameraPosition - vWorld);
   vec3 L = normalize(uCorePos - vWorld);
 
@@ -84,8 +99,8 @@ void main() {
   float pool = exp(-rCore * rCore * 0.05) * (0.10 + uCoreGlow * 0.30 + uPulse * 0.18);
   lit += uGoldBright * pool * 0.14;
 
-  // złoty emissive na grzbietach fal — #d9984a, bez bieli
-  lit += uGold * smoothstep(0.02, 0.18, vCrest) * (0.5 + uCoreGlow * 0.5);
+  // złoty emissive na grzbietach fal — #d9984a, bez bieli (smoothstep per-piksel)
+  lit += uGold * smoothstep(0.02, 0.30, crest) * (0.18 + uCoreGlow * 0.24);
 
   lit = applyFog(lit, vDist);
   gl_FragColor = vec4(lit, 1.0);
