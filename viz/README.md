@@ -20,8 +20,28 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
   Wymaga `data/<nazwa>/analysis.json` + stemów `wokal/bas/bebny/inne.wav`
   (wav-y są poza repo — odtwarzalne przez `separate.py` + `analyze_stems.py`).
 - `?demo&t=123` — start bez gestu użytkownika, od 123 s (zegar własny, bez audio).
-- `Spacja` — pauza · `H` — panel HUD · `#err` — błędy JS · `window.__viz` — sonda stanu
-  (`t, energy, dropEnv, dropLog, bursts, fpsP95, calls, tris, ribbon…`).
+- `Spacja` — pauza · `H` — panel HUD · `S` — panel ścieżek · `#err` — błędy JS ·
+  `window.__viz` — sonda stanu (`t, energy, dropEnv, dropLog, bursts, fpsP95, calls,
+  tris, ribbon, muted…`).
+
+## Panel ścieżek (testowanie interakcji)
+
+Dyskretny przycisk w lewym dolnym rogu (↑ obok HUD, klawisz `S`) rozwija listę czterech
+stemów. Wyciszenie ścieżki robi dwie rzeczy naraz: `muted` na elemencie audio (słychać,
+co wypada) i **gain 0 na jej sygnale w pętli** (widać, co znika z animacji). Dzięki temu
+każdą parę „ścieżka → obiekt” testuje się bez grzebania w kodzie:
+
+| wyciszasz | znika |
+|---|---|
+| `wokal` | wstęga zjeżdża do cienkiej nici (szerokość 0.16 m, bez falowania) |
+| `bas` | struktura sfery wygładza się, zero cząstek na bit, zero fajerwerku na drop |
+| `bebny` | zero fal na ziemi i zero pulsu sfery (już puszczone fale dożywają) |
+| `inne` | sfera gaśnie: zero błysków i zero ciągłej jasności z RMS |
+
+Energia to mix stemów (`0.45 bas + 0.30 inne + 0.25 bebny`), więc wyciszenie ścieżki
+odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena naprawdę cicha.
+`WSZYSTKO` przywraca wszystkie; klik poza panelem zamyka panel bez zmiany stanu.
+
 
 ## Architektura (`viz/js/`)
 
@@ -36,6 +56,7 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 | `ridge.js` | czysta matematyka grzbietu (bez `three`): `ridgeProfile` + tabela `RANGES` (4 pasma: near −95, mid −165, far −300, distant −470 m). Wydzielone, żeby sylwetkę policzyć w node: `node viz/scripts/crest_preview.mjs` |
 | `mountains.js` | panorama = **4 pasma**, grzbiet **wypalany na CPU przy starcie** do tekstury R32F (768 kolumn × 6 wierszy na pasmo) — vertex shader nie liczy szumu. **Głębia = perspektywa powietrzna** (każde pasmo jaśnieje ku kolorowi nieba, zero `FogExp2` na pasmach), cieniowanie zboczy z wygładzonego nachylenia (±40 kolumn), rim na grani, mgła u podstawy, miękka krawędź. **Statyczne — zero sterowania dźwiękiem** |
 | `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury, prędkość od tempa) + **320 statycznych gwiazd** na sferze R = 430, elewacja 8–37°, azimut ±65°, migotanie ±18%. Bez pyłu i bez bokeh-iskier |
+| `settings.js` | panel ścieżek: przycisk + lista stemów w lewym dolnym rogu; trzyma `gain[id] ∈ {0,1}` czytany w pętli i woła `onToggle` (main.js wycisza audio). Bez zależności od sceny, żeby dało się go testować osobno |
 | `postfx.js` | RenderPass → UnrealBloom (0.55 / 0.75 / próg 0.6) → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
 | `serve.py` | statyczny serwer na :8080 (root = repo) |
 

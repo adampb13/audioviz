@@ -18,10 +18,49 @@
     border-radius: 999px; border: 1px solid #d9984a; background: transparent; color: #ffcf8a;
     cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(217,152,74,.25); }
   button:hover { background: rgba(217,152,74,.12); }
-  #hud { position: fixed; left: 12px; bottom: 10px; z-index: 1; white-space: pre;
+  #hud { position: fixed; left: 46px; bottom: 10px; z-index: 1; white-space: pre;
     font: 12px/1.45 ui-monospace, Consolas, monospace; opacity: .55; color: #d9984a; }
   #hud.off { display: none; }
   #err { color: #f88; max-width: 80vw; text-align: center; white-space: pre-wrap; }
+
+  /* ---------- panel ścieżek: dyskretny, wtopiony w dolny lewy róg ---------- */
+  #gear { position: fixed; left: 10px; bottom: 8px; z-index: 3; width: 26px; height: 26px;
+    padding: 0; display: grid; place-items: center; border-radius: 50%;
+    font-size: 0; letter-spacing: 0; text-transform: none;
+    border: 1px solid rgba(217,152,74,.16); background: rgba(6,3,1,.28);
+    color: rgba(255,207,138,.42); box-shadow: none; opacity: .8;
+    transition: color .25s, border-color .25s, background .25s, opacity .25s; }
+  #gear svg { width: 13px; height: 13px; display: block; }
+  #gear:hover, #gear.open { color: rgba(255,207,138,.92); border-color: rgba(217,152,74,.44);
+    background: rgba(30,17,6,.5); opacity: 1; }
+  #panel { position: fixed; left: 10px; bottom: 40px; z-index: 3; width: 214px;
+    padding: 10px 11px 8px; border-radius: 12px; box-sizing: border-box;
+    background: rgba(10,6,2,.6); -webkit-backdrop-filter: blur(10px) saturate(120%);
+    backdrop-filter: blur(10px) saturate(120%);
+    border: 1px solid rgba(217,152,74,.15); box-shadow: 0 14px 44px rgba(0,0,0,.5);
+    font: 11px/1.3 ui-monospace, Consolas, monospace; color: rgba(236,223,200,.82);
+    opacity: 0; transform: translateY(6px); pointer-events: none;
+    transition: opacity .22s ease, transform .22s ease; }
+  #panel.open { opacity: 1; transform: none; pointer-events: auto; }
+  #panel .t { font-size: 9px; letter-spacing: .2em; text-transform: uppercase;
+    color: rgba(217,152,74,.5); margin: 0 0 7px 3px; }
+  .stem { display: flex; align-items: center; gap: 7px; padding: 4px 5px; border-radius: 7px;
+    cursor: pointer; user-select: none; outline: none;
+    transition: background .16s, opacity .16s; }
+  .stem:hover, .stem:focus-visible { background: rgba(217,152,74,.08); }
+  .stem .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: #ffcf8a;
+    box-shadow: 0 0 8px rgba(255,207,138,.55); transition: background .16s, box-shadow .16s; }
+  .stem .n { flex: 1; letter-spacing: .05em; }
+  .stem .h { font-size: 9px; color: rgba(217,152,74,.4); }
+  .stem.off { opacity: .42; }
+  .stem.off .dot { background: rgba(217,152,74,.3); box-shadow: none; }
+  .stem.off .n { text-decoration: line-through; }
+  #panel .foot { margin-top: 6px; padding-top: 6px; display: flex; align-items: center;
+    justify-content: space-between; gap: 8px; border-top: 1px solid rgba(217,152,74,.11);
+    font-size: 8.5px; white-space: nowrap; color: rgba(217,152,74,.34); }
+  #panel .foot button { all: unset; cursor: pointer; font-size: 9px; letter-spacing: .12em;
+    color: rgba(217,152,74,.6); text-transform: uppercase; }
+  #panel .foot button:hover { color: #ffcf8a; }
 </style>
 <script type="importmap">
 {

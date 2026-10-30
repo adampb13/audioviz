@@ -191,7 +191,8 @@ export class VocalRibbon {
     for (const u of this.layerMats) u.uHalfX.value = halfX;
   }
 
-  update(t, track, dt) {
+  // gain: 1 = wokal gra, 0 = ścieżka wyciszona w panelu → wstęga zjeżdża do nici
+  update(t, track, dt, gain = 1) {
     const ts = t + 0.08; // lead 80 ms — kompensacja latencji
     // PAUZA: czas stoi, a dt z rAF leci dalej — bez tego falowanie i szerokość
     // dryfowałyby, gdy reszta sceny zamarza
@@ -199,8 +200,8 @@ export class VocalRibbon {
     this.lastT = t;
 
     const midiT = sampleAt(track.vMidi, track.fps, ts);
-    const probT = sampleAt(track.vProb, track.fps, ts);
-    const rmsT = clamp(sampleAt(track.vRms, track.fps, ts), 0, 1);
+    const probT = sampleAt(track.vProb, track.fps, ts) * gain;
+    const rmsT = clamp(sampleAt(track.vRms, track.fps, ts) * gain, 0, 1);
     const centT = clamp(sampleAt(track.vCent, track.fps, ts) / (track.vCentP95 || 4000), 0, 1);
     const bpmT = sampleAt(track.tempo, track.fps, ts) || 110;
 

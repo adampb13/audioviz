@@ -11,6 +11,7 @@ import { VocalRibbon } from "./ribbon.js";
 import { Mountains } from "./mountains.js";
 import { Atmosphere } from "./atmosphere.js";
 import { createPost } from "./postfx.js";
+import { createSettings } from "./settings.js";
 
 const params = new URLSearchParams(location.search);
 const TRACK = params.get("track") || "blindinglights";
@@ -123,6 +124,15 @@ for (const name of STEM_FILES) {
 }
 const masterAudio = () => STEM_FILES.map((n) => audio[n]).find((el) => el && el.src);
 
+// ---------- panel ścieżek (przycisk w lewym dolnym rogu) ----------
+// Wyciszenie ścieżki = `muted` na audio ORAZ gain 0 na jej sygnale w pętli,
+// więc test „co robi sam bas / sam wokal" nie wymaga grzebania w kodzie.
+const settings = createSettings((id, on) => {
+  const el = audio[id];
+  if (el) el.muted = !on;
+});
+if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio; }
+
 // ---------- zdarzenia (triggery impulsowe, bez interpolacji) ----------
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
@@ -221,17 +231,36 @@ function frame() {
   const t = currentTime();
 
   // próbki surowe (interpolacja między klatkami) -> stan tłumiony (damp)
-  const vRmsT = sampleAt(track.vRms, track.fps, t);
-  const vProbT = sampleAt(track.vProb, track.fps, t);
-  const vMidiT = sampleAt(track.vMidi, track.fps, t);
-  const vCentT = clamp(sampleAt(track.vCent, track.fps, t) / track.vCentP95, 0, 1);
-  const bRmsT = sampleAt(track.bRms, track.fps, t);
-  const bCentT = clamp(sampleAt(track.bCent, track.fps, t) / track.bCentP95, 0, 1);
-  const dRmsT = sampleAt(track.dRms, track.fps, t);
-  const oRmsT = sampleAt(track.oRms, track.fps, t);
-  const oCentT = clamp(sampleAt(track.oCent, track.fps, t) / track.oCentP95, 0, 1);
-  const tempoT = sampleAt(track.tempo, track.fps, t);
-  const energyT = sampleAt(track.energy, track.fps, t);
+  // Gain ścieżek z panelu: 0 = wyciszona, jej sygnał nie wchodzi do animacji.
+  const g = settings.gain;
+  const vRmsRaw = sampleAt(track.vRms, track.fps, t);
+  const vProbRaw = sampleAt(track.vProb, track.fps, t);
+  const vMidiRaw = sampleAt(track.vMidi, track.fps, t);
+  const vCentRaw = sampleAt(track.vCent, track.fps, t);
+  const bRmsRaw = sampleAt(track.bRms, track.fps, t);
+  const bCentRaw = sampleAt(track.bCent, track.fps, t);
+  const dRmsRaw = sampleAt(track.dRms, track.fps, t);
+  const oRmsRaw = sampleAt(track.oRms, track.fps, t);
+  const oCentRaw = sampleAt(track.oCent, track.fps, t);
+  const tempoT = sampleAt(track.tempo, track.fps, t); // nie jest ścieżką — zawsze aktywny
+  const energyRaw = sampleAt(track.energy, track.fps, t);
+
+  const vRmsT = vRmsRaw * g.wokal;
+  const vProbT = vProbRaw * g.wokal;
+  const vMidiT = vMidiRaw;
+  const vCentT = clamp(vCentRaw / track.vCentP95, 0, 1) * g.wokal;
+  const bRmsT = bRmsRaw * g.bas;
+  const bCentT = clamp(bCentRaw / track.bCentP95, 0, 1) * g.bas;
+  const dRmsT = dRmsRaw * g.bebny;
+  const oRmsT = oRmsRaw * g.inne;
+  const oCentT = clamp(oCentRaw / track.oCentP95, 0, 1) * g.inne;
+  // energia = mix stemów (0.45 bas + 0.30 inne + 0.25 bebny) — po wyciszeniu
+  // ścieżki jej udział wypada, więc cisza na scenie jest naprawdę cicha
+  const mixAll = 0.45 * bRmsRaw + 0.30 * oRmsRaw + 0.25 * dRmsRaw;
+  const mixNow = 0.45 * bRmsRaw * g.bas + 0.30 * oRmsRaw * g.inne + 0.25 * dRmsRaw * g.bebny;
+  const stemMix = mixAll > 1e-4 ? clamp(mixNow / mixAll, 0, 1)
+    : (g.bas || g.inne || g.bebny ? 1 : 0);
+  const energyT = energyRaw * stemMix;
 
   // wokal: szybki atak, wolne puszczanie — brak lagi, brak migotania (audit P0-3)
   S.vRms = damp(S.vRms, vRmsT, vRmsT > S.vRms ? 17.3 : 4.4, dt);
@@ -254,6 +283,7 @@ function frame() {
   // uderzenia w bębny: fala na ziemi + JEDEN puls sfery, nic więcej
   onsets.poll(t, (_t0, s) => {
     S.onsetsFired++;
+    if (!g.bebny) return;              // wyciszone „bebny” = zero fal i zero pulsu
     if (s < 0.02) return;              // próg tylko na cyfrową ciszę — każdy transient = fala
     if (t - lastWaveT < 0.05) return;  // dedupe 50 ms (detektor ma rozdzielczość 16.7 ms)
     lastWaveT = t;
@@ -270,6 +300,7 @@ function frame() {
   // Próg tylko na cyfrową ciszę; 40 ms dedupe (detektor: rozdzielczość 16.7 ms).
   otherOnsets.poll(t, (_t0, s) => {
     S.otherHits++;
+    if (!g.inne) return;               // wyciszone „inne” = sfera bez błysków
     if (s < 0.02 || t - lastOther < 0.04) return;
     lastOther = t;
     core.otherHit(s);
@@ -278,6 +309,7 @@ function frame() {
   // gdy bas w ogóle nie gra)
   bassBeats.poll(t, () => {
     S.bassHits++;
+    if (!g.bas) return;                // wyciszony „bas” = brak cząstek
     if (S.bRms < 0.12) return;
     core.bassHit(clamp(S.bRms, 0.2, 1));
   });
@@ -285,7 +317,8 @@ function frame() {
   // Warunki: skok > 0.20, teraz naprawdę głośno (>0.55), tło jeszcze ciche
   // (<0.42), edge + 1.4 s cooldown (obwiednia dogania skok przez ~0.5 s).
   const jump = energyT - S.dropEnv;
-  if (jump > 0.20 && energyT > 0.55 && S.dropEnv < 0.42 && t - lastBurst > 1.4) {
+  // fajerwerk należy do „bas” (jak cząstki na bit) — przy wyciszonym basie nie strzela
+  if (g.bas && jump > 0.20 && energyT > 0.55 && S.dropEnv < 0.42 && t - lastBurst > 1.4) {
     lastBurst = t;
     S.bursts++;
     S.dropLog.push({ t: +t.toFixed(2), jump: +jump.toFixed(2), e: +energyT.toFixed(2), env: +S.dropEnv.toFixed(2) });
@@ -296,7 +329,7 @@ function frame() {
   // głośność „inne" znormalizowana p95 — jedyny sygnał koloru/jasności sfery
   const oRmsN = clamp(S.oRms / (track.oRmsP95 || 1), 0, 1);
   core.update(t, dt, S.energy, S.beatPulse, S.bRms, oRmsN, S.oCent);
-  ribbon.update(t, track, dt);
+  ribbon.update(t, track, dt, g.wokal);
   atmosphere.update(t, dt, S.energy, S.tempo);
   // pełny exposure tylko w piku (audit v2 P1)
   renderer.toneMappingExposure = 1.05 + S.energy * 0.3;
@@ -339,6 +372,7 @@ function frame() {
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
       ctxLost, track: TRACK,
+      muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
     };
   }
 }
