@@ -5,7 +5,7 @@
 //     złoto) i podbija jasność; między onsetami kula jest przygaszonym żarem.
 //     Mocne, głośne dźwięki rozbłyskują kulę DO BIAŁY na ~0.15 s (uWhite).
 //   • „bas"  -> STRUKTURA. Poniżej ~0.50 basu kula jest gładka, powyżej 0.85
-//     falowanie jest najgłębsze; KAŻDY bit basu dodatkowo wzbiera powłokę (uBeat).
+//     falowanie jest najgłębsze (jedno ciągłe pole, bez impulsów na bit).
 //     Bas zmienia tylko amplitudę i tempo falowania — nigdy kierunek, więc nie
 //     robi wklęsnięć ani innych deformacji: kula zawsze zostaje kulą.
 //   • energia + głośność całości -> ROZMIAR. Najmocniejsze momenty rosną o ~85%.
@@ -22,16 +22,16 @@ import { NOISE_GLSL, PAL } from "./glsl.js";
 // `dot(n, dir)` wypychał jedną stronę i wklęsnął drugą — z tego brały się
 // „wklęśnięcia z jednej strony" i wygląd zmiętej kartki.
 // Bas reguluje WYŁĄCZNIE amplitudę i tempo falowania (mocniej/słabiej).
+// Deformacja jest CIĄGŁA: jedno wygładzone pole `uStruct` (obecność basu),
+// żadnych impulsów „na bit" — kula faluje płynnie, bez uderzeń faktury.
 const DISP_GLSL = /* glsl */ `
 uniform float uTime;
 uniform float uStruct;   // 0..1 — obecność basu: gęstsze, głębsze falowanie
-uniform float uBeat;     // 0..1 — impuls na KAŻDY bit basu: powłoka wzbiera
 float dispAt(vec3 n) {
-  // bicie basu przyspiesza falowanie (faktura „żyje" na bicie)...
-  float tt = uTime * (0.20 + 0.45 * uBeat);
+  // falowanie płynie CAŁY CZAS, bas zmienia tylko jego tempo — bez skoków na bicie
+  float tt = uTime * (0.14 + 0.30 * uStruct);
   float nf = 1.15 + uStruct * 0.85;           // 2-3 garby na kulę: 1.15 → 2.00
-  // ...i podbija amplitudę: ta sama powłoka, wyraźniejsze garby. Kierunku nie zmieniamy.
-  float amp = 0.40 + 0.55 * uStruct + 0.80 * uBeat;
+  float amp = 0.45 + 0.80 * uStruct;
   float d = snoise(n * nf + vec3(0.0, tt, 0.0)) * 0.72;
   d += snoise(n * (nf * 1.60) + vec3(tt * 0.45, tt * 0.28, 0.0)) * 0.12;
   return d * amp;
@@ -39,7 +39,7 @@ float dispAt(vec3 n) {
 `;
 
 const VERT = /* glsl */ `
-uniform float uWobble;   // uTime, uStruct, uBeat deklaruje DISP_GLSL poniżej
+uniform float uWobble;   // uTime, uStruct deklaruje DISP_GLSL poniżej
 varying vec3 vN;
 varying vec3 vWorld;
 varying vec3 vObj;
@@ -49,9 +49,7 @@ ${DISP_GLSL}
 void main() {
   vec3 n = normalize(position);
   float d0 = dispAt(n);
-  // bit basu wzbiera całą powłokę równomiernie (~2%) — to też nie deformuje kształtu
-  float breath = 1.0 + 0.02 * uBeat;
-  vec3 p = (position + n * d0 * uWobble) * breath;
+  vec3 p = position + n * d0 * uWobble;
 
   // Normalna z gradientu pola przemieszczenia (różnice skończone po stycznych):
   // bez tego fałdy widać tylko na sylwetce, a światło ich nie łapie.
@@ -85,7 +83,6 @@ const float GAIN = 0.50;    // jasność bazowa
 const float HOT = 0.50;     // temperatura górnego końca (bursztyn <-> krem)
 uniform float uTime;
 uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
-uniform float uBeat;    // bit basu — wzbiera falowanie jasności
 varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
 varying vec3 vObj;
 varying vec3 vN;
@@ -106,7 +103,7 @@ void main() {
   // Jasność idzie ZA tym samym polem, które wypycha wierzchołki (vDisp), więc
   // garby łapią światło, a doliny zostają ciemniejsze — czyta się jak powłoka,
   // a nie jak plamy na kuli.
-  float relief = 1.0 + vDisp * (0.28 * uStruct + 0.34 * uBeat);
+  float relief = 1.0 + vDisp * (0.52 * uStruct);
   relief = clamp(relief, 0.65, 1.40);
   vec3 col = base * (0.72 + fres * 0.85) * GAIN * relief;
   // miękki sufit: żar trzyma się PONIŻEJ odbarwienia — ACES nie myje go do bieli
@@ -135,7 +132,7 @@ function haloTexture() {
 
 const R_BASE = 0.9;     // promień siatki sfery
 const GROW = 0.85;      // ile rośnie kula przy pełnej energii (1 -> 1.85)
-const BEAT_GROW = 0.10; // dodatkowy puls od bębnów
+const BEAT_GROW = 0.26; // puls od bębnów: do +26% promienia na uderzenie
 
 export class CoreSphere {
   constructor() {
@@ -146,7 +143,6 @@ export class CoreSphere {
       uTime: { value: 0 },
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
-      uBeat: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
@@ -175,55 +171,43 @@ export class CoreSphere {
     this.mesh.add(this.light);
 
     // obwiednie (czysto JS)
-    this.bass = 0;  // obecność basu (struktura)
-    this.beat = 0;  // impuls struktury na bit basu
-    this.scale = 1; // wygładzony rozmiar (energia + puls bębnów)
-  }
-
-  // DROP: bas uderza mocniej — struktura dostaje grubsze żebro. Koloru NIE
-  // dotykamy: kolor kuli jest stały i nie zależy od żadnej ścieżki.
-  loudHit(v = 1) {
-    const s = Math.min(1, Math.max(0, v));
-    this.beat = Math.max(this.beat, 0.85 * s);
-  }
-
-  // KAŻDY bit „bas" — WYŁĄCZNIE struktura (żebro biegnące po kuli).
-  // Bas nie ma prawa dotknąć koloru ani bieli.
-  bassPulse(strength) {
-    const s = Math.min(1, Math.max(0.2, strength));
-    this.beat = Math.max(this.beat, 0.55 + 0.45 * s);
+    this.bass = 0;  // CIĄGŁA, wygładzona obecność basu (struktura)
+    this.pulse = 0; // puls od uderzenia w bębny (rozmiar, szybki ale gładki)
+    this.scale = 1; // wygładzony rozmiar bazowy (z energii całości)
   }
 
   // energySmooth: energia całości (rozmiar); beatPulse: puls bębnów (rozmiar);
   // bassEnv: obecność basu (struktura). Kolor kuli nie zależy od żadnej ścieżki.
   update(t, dt, energySmooth, beatPulse, bassEnv) {
-    // STRUKTURA — tylko bas. Szybki atak, szybsze puszczenie: zmiany mają być
-    // wyraźne w rytm basu, ale wciąż bez skoków.
-    const kb = bassEnv > this.bass ? 9.0 : 2.4;
+    // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia jest wygładzona
+    // dwustronnie (atak 3.2/s, puszczenie 1.8/s), więc faktura „oddycha"
+    // razem z obecnością basu, a nie drga na każdym jego bicie.
+    const kb = bassEnv > this.bass ? 3.2 : 1.8;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
-    this.beat *= Math.exp(-dt * 7.0);  // żebro basu znika w ~0.2 s
 
-    // ROZMIAR — sumaryczna energia i głośność muzyki. Krzywa potęgowa, żeby
-    // spokojne fragmenty były wyraźnie mniejsze, a najmocniejsze momenty rosły
-    // o ~85% (1.00 -> 1.85). Puls bębnów dokłada 0.10 na uderzenie.
+    // ROZMIAR — bazowo z energii całości, a na to puls bębnów.
     const en = Math.min(1, Math.max(0, energySmooth));
-    const scT = 1.0 + GROW * Math.pow(en, 1.15) + beatPulse * BEAT_GROW;
+    const scT = 1.0 + GROW * Math.pow(en, 1.15);
     this.scale += (scT - this.scale) * (1 - Math.exp(-dt * 6.0)); // bez skoków
+    // puls bębnów: szybki, ale gładki atak (0.05 s) i krótkie, czytelne
+    // wybrzmienie (~0.11 s) — przy gęstych uderzeniach (4/s) kula wyraźnie
+    // „pompuje”, a nie stoi napompowana.
+    const kp = beatPulse > this.pulse ? 22.0 : 9.0;
+    this.pulse += (beatPulse - this.pulse) * (1 - Math.exp(-dt * kp));
+    const scalePulse = this.scale * (1 + BEAT_GROW * this.pulse);
 
     this.uniforms.uTime.value = t;
     // struktura TYLKO przy MOCNO obecnym basie: poniżej 0.55 kula jest
     // gładka, powyżej 0.90 marszczy się na maksa (smoothstep = bez skoku)
-    const st0 = 0.50, st1 = 0.85;
+    const st0 = 0.30, st1 = 0.92;
     const q = Math.min(1, Math.max(0, (this.bass - st0) / (st1 - st0)));
     const bassG = q * q * (3 - 2 * q);
     this.uniforms.uStruct.value = bassG;
-    this.uniforms.uBeat.value = this.beat;
-    // Amplituda przemieszczenia: spokój 1.8% promienia, pełne fałdy basu ~5.3%.
-    // Żebro bitu (uBeat) siedzi w polu funkcji, więc dokłada się samo — razem
-    // najgorszy przypadek ~20% promienia: mocno widać, kula się nie rozlatuje.
-    this.uniforms.uWobble.value = 0.016 + bassG * 0.026;
+    // Amplituda przemieszczenia: spokój 1.4% promienia, pełne fałdy basu ~4.8%.
+    // Bas zmienia TYLKO tę amplitudę — deformacja jest ciągła, bez impulsów.
+    this.uniforms.uWobble.value = 0.014 + bassG * 0.034;
 
-    this.mesh.scale.setScalar(this.scale);
+    this.mesh.scale.setScalar(scalePulse);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,
     // nie zalewać sceny (audit: „nie oświetlać jakoś bardzo sceny do góry")
     this.light.intensity = 2.4;
