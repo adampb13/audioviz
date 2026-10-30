@@ -43,6 +43,9 @@
   #hud .row.vec { height: 20px; }
   #hud .lb { flex: none; width: 78px; color: rgba(236,223,200,.52); font-size: 9.5px;
     letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* • przy parametrach, które sterują iskrami (peak, centroid) */
+  #hud .lb.drv { color: rgba(255,214,150,.92); }
+  #hud .lb.drv::after { content: "•"; margin-left: 3px; color: #ffb347; font-size: 11px; }
   #hud .bar { position: relative; flex: 1 1 auto; height: 3px; border-radius: 2px;
     background: rgba(217,152,74,.09); overflow: hidden; }
   #hud .bar > i { position: absolute; inset: 0; border-radius: 2px;

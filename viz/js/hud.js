@@ -30,6 +30,12 @@ const SHORT = {
   onset_strength: "onset_str",
 };
 
+// Pola, które realnie sterują iskrami (oznaczone kropką w panelu H).
+const DRIVES = {
+  peak: "steruje iskrami: gęstość emisji + rozmiar drobiny",
+  centroid_hz: "steruje iskrami: kolor (ciemny żar ↔ biały żar) + wysokość wylotu z kuli",
+};
+
 const UNIT = {
   rms_db: "dB",
   centroid_hz: "Hz", bandwidth_hz: "Hz", rolloff_hz: "Hz", dominant_hz: "Hz", pitch_hz: "Hz",
@@ -85,6 +91,12 @@ export function createInneHud(track) {
       lb.className = "lb";
       lb.textContent = SHORT[p.id] || p.label;
       lb.title = p.id;
+      // • = parametr, który steruje iskrami (main.js → particles.js):
+      //   peak → gęstość i rozmiar, centroid → kolor i miejsce wylotu
+      if (DRIVES[p.id]) {
+        lb.classList.add("drv");
+        lb.title = `${p.id} — ${DRIVES[p.id]}`;
+      }
 
       const vl = document.createElement("span");
       vl.className = "vl";

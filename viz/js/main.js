@@ -154,6 +154,8 @@ function resetCursors(t) {
   lastWaveT = t - 2;    // …i nie blokujemy pierwszej fali debounce'em z przyszłości
   lastSpark = t - 2;    // …i nie sypiemy iskrami za akcent, który już minął
   oPeakPrev = 0;
+  sparkAcc = 0;         // emisja iskier startuje od zera (bez „zaległych" drobin)
+  S.sparkEnv = 0;
 }
 
 // Odporny reset warstwy sceny. Bez tego pojedynczy brak metody (np. stary
@@ -196,12 +198,19 @@ const S = {
   energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0, sparksFired: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
-// Iskry po bokach kuli: próg `peak` ścieżki „inne" i dedupe. p95 tego utworu
-// to 0.446, więc 0.38 łapie mocne akcenty, ale nie każdy szum (~9 na 20 s,
-// jedno co ~2.2 s — wciąż pojedyncze drobiny, nie fontanna).
-const SPARK_PEAK = 0.38;
-let lastSpark = -10;  // czas ostatniej iskry (refrakcja 0.35 s)
-let oPeakPrev = 0;    // poprzednia próbka peak — detekcja ZBOCZA, nie poziomu
+// ISKRY = obraz ścieżki „inne" w danej chwili (mapowanie w README):
+//   gęstość  ← obwiednia `peak`     (ile się dzieje w „inne")
+//   rozmiar  ← `peak`               (jak głośny jest akcent)
+//   kolor    ← `centroid_hz`        (jak jasne jest widmo)
+//   elewacja ← `centroid_hz`        (jasne dźwięki wylatują z góry kuli)
+const SPARK_PEAK = 0.50;   // próg akcentu (zbocze `peak`, p98) → jedna iskra „na błysk"
+const SPARK_LOUD = 0.10;   // poniżej tej głośności „inne" praktycznie milczy
+const SPARK_FULL = 0.55;   // pełna gęstość emisji
+let lastSpark = -10;       // czas ostatniej iskry akcentowej (refrakcja 0.45 s)
+let oPeakPrev = 0;         // poprzednia próbka peak — detekcja ZBOCZA, nie poziomu
+let sparkAcc = 0;          // akumulator emisji (iskry/s * dt)
+S.sparkEnv = 0;            // obwiednia głośności „inne" (gęstość emisji)
+S.sparkBright = 0;         // jasność widma „inne" 0..1 (kolor iskier)
 if (window.__dbg) window.__dbg.S = S;
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
 const fpsHist = new Float32Array(240);
@@ -384,19 +393,37 @@ function frame() {
     S.beatPulse = Math.max(S.beatPulse, 0.50 + sn * 0.50); // sfera pulsuje raz, na ten sam atak
   });
 
-  // POJEDYNCZE ISKRY: jedna drobina na każde PRZEKROCZENIE progu `peak` w „inne",
-  // naprzemiennie lewa/prawa. Detekcja zbocza (nie „jestem powyżej progu"), więc
-  // jeden głośny fragment daje jedną iskrę, a nie serię co klatkę.
+  // ISKRY: ciągła emisja z kuli, w całości sterowana ścieżką „inne".
+  // Gęstość = obwiednia `peak` (gęsty fragment sypie iskrami, cichy ledwo jedną),
+  // rozmiar i prędkość = `peak`, kolor i elewacja na kuli = `centroid_hz`.
+  // Dodatkowo przekroczenie progu daje jedną iskrę „na błysk" (transjent).
   if (g.inne) {
-    if (oPeakPrev < SPARK_PEAK && oPeakRaw >= SPARK_PEAK && t - lastSpark > 0.35) {
+    const loud = clamp((oPeakRaw - SPARK_LOUD) / Math.max(0.05, SPARK_FULL - SPARK_LOUD), 0, 1);
+    // jasność widma w log2 — ucho słyszy częstotliwość logarytmicznie
+    const cz = Math.log2(Math.max(80, oCentRaw));
+    const bright = clamp((cz - track.oCentLo) / Math.max(0.5, track.oCentHi - track.oCentLo), 0, 1);
+    S.sparkBright = bright;
+    // obwiednia: szybki atak, spokojny powrót — gęstość nie „miga" na każdym akcencie
+    S.sparkEnv = damp(S.sparkEnv, loud, loud > S.sparkEnv ? 9.0 : 2.2, dt);
+
+    sparkAcc += (0.15 + 2.80 * Math.pow(S.sparkEnv, 1.7)) * dt;
+    let guard = 0;
+    while (sparkAcc >= 1 && guard++ < 4) {
+      sparkAcc -= 1;
+      sparks.spawn(S.sparkEnv, bright, core.surfaceRadius());
+      S.sparksFired++;
+    }
+    // akcent: przekroczenie progu → iskra od razu, żeby uderzenie „strzeliło"
+    if (oPeakPrev < SPARK_PEAK && oPeakRaw >= SPARK_PEAK && t - lastSpark > 0.45) {
       lastSpark = t;
-      const st = clamp((oPeakRaw - SPARK_PEAK) / Math.max(0.02, 0.62 - SPARK_PEAK), 0, 1);
-      sparks.spawn(0.35 + 0.65 * st, core.surfaceRadius());
+      sparks.spawn(clamp(loud * 1.15, 0, 1), bright, core.surfaceRadius());
       S.sparksFired++;
     }
     oPeakPrev = oPeakRaw;
   } else {
     oPeakPrev = 0; // wyciszone „inne" = zero iskier
+    sparkAcc = 0;
+    S.sparkEnv = 0;
   }
 
   // aktualizacje systemów
@@ -417,9 +444,7 @@ function frame() {
     if (S.dropLog.length > 12) S.dropLog.shift();
   }
 
-  // (cząstki boczne usunięte — patrz komentarz przy systemach sceny)
-
-  // kolor sfery jest stały — żadna ścieżka go nie zmienia
+  // barwa sfery idzie za energią całości (core.glow) — nie za „inne"
   core.update(t, dt, S.energy, S.beatPulse, S.bRms);
   ribbon.update(t, track, dt, g.wokal);
   atmosphere.update(t, dt, S.energy, S.tempo);
@@ -466,7 +491,9 @@ function frame() {
       core: { pulse: core.pulse, scale: core.scale, glow: core.glow,
         uStruct: core.uniforms.uStruct.value, uWobble: core.uniforms.uWobble.value },
       sparks: { alive: sparks.alive, spawned: sparks.spawned, fired: S.sparksFired,
-        peak: +oPeakPrev.toFixed(3) },
+        peak: +oPeakPrev.toFixed(3), env: +S.sparkEnv.toFixed(3),
+        bright: +S.sparkBright.toFixed(3), loud: +sparks.lastLoud.toFixed(3),
+        tint: [sparks.lastBright, sparks.lastLoud] },
       ctxLost, track: TRACK,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
     };

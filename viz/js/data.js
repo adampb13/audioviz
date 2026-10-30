@@ -118,6 +118,10 @@ export class Track {
     this.oRmsP95 = percentile(o.rms_norm, 95) || 1; // do normalizacji głośności „inne"
     this.oCent = toF32(o.centroid_hz);
     this.oCentP95 = percentile(o.centroid_hz, 95) || 1;
+    // jasność widma „inne" w log2 (ucho słyszy częstotliwość logarytmicznie):
+    // z tego idzie KOLOR iskier i wysokość, z której wylatują z kuli
+    this.oCentLo = Math.log2(Math.max(80, percentile(o.centroid_hz, 10) || 300));
+    this.oCentHi = Math.max(this.oCentLo + 0.5, Math.log2(Math.max(120, this.oCentP95)));
     // szczyt „inne" — z niego odpalają się pojedyncze iskry po bokach kuli
     this.oPeak = toF32(o.peak);
     this.oPeakP95 = percentile(o.peak, 95) || 1;

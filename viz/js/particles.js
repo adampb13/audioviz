@@ -1,37 +1,45 @@
-// POJEDYNCZE ISKRY po bokach kuli — nie chmura, nie fontanna, jedna drobina.
+// ISKRY WYLATUJĄCE Z KULI — obraz ścieżki „inne" w danej chwili.
 //
-// Zasada: iskra pojawia się WYŁĄCZNIE w chwili przekroczenia progu `peak`
-// w ścieżce „inne" (próg w main.js, 0.38; p95 tego utworu to 0.446, więc łapie
-// mocne akcenty — ~9 zdarzeń na 20 s, jedno co ~2.2 s). Na jedno
-// przekroczenie wypada JEDNA iskra, naprzemiennie po lewej i prawej stronie kuli,
-// na ziemi tam, gdzie rozchodzą się fale (między kamerą a górami).
+// Każda iskra niesie TRZY informacje z tej samej chwili utworu, każdą widać
+// osobno (pełne mapowanie w README):
+//   • ILE iskier    ← obwiednia `peak` (gęstość emisji 0.15–3.5/s), więc gęsty
+//                     fragment sypie iskrami, a cichy ledwo jedną;
+//   • JAK DUŻA      ← `peak` w chwili emisji (głośny akcent = duża, szybka,
+//                     leci wyżej);
+//   • JAKI KOLOR    ← `centroid_hz` (jasność widma): ciemny pad = głęboki
+//                     czerwony żar, jasny arp/hi-hat = biały żar;
+//   • SKĄD WYLATUJE ← też centroid: ciemne dźwięki z dolnej flanki kuli,
+//                     jasne z górnej (wysokość startu = wysokość dźwięku).
 //
-// Ruch: iskra WYLATUJE Z POWIERZCHNI KULI (start na powłoce, po bokach), leci
-// na zewnątrz i w górę, potem grawitacja ściąga ją łukiem na ziemię; życie
-// 2.6-3.6 s, wygaszanie w ostatnich 55% — iskra „spokojnie opada i gaśnie",
-// nigdy nie strzela i nie znika skokiem.
+// Ruch: start na POWIERZCHNI kuli (promień z core.surfaceRadius(), więc podąża
+// za rozmiarem i pulsem), wyrzut wzdłuż normalnej + w górę, potem grawitacja
+// ściąga iskrę łukiem nad fale; wygaszanie w ostatnich 55% życia — „spokojnie
+// opada i gaśnie", nigdy nie strzela i nie znika skokiem.
 //
 // Zero zależności od FPS: wszystko dt-owane, pula stała (MAX), jeden draw call.
 import * as THREE from "three";
-import { PAL } from "./glsl.js";
 
-const MAX = 24;              // pula na obie strony — więcej nie jest potrzebne
-const LIFE = [2.6, 3.6];     // życie (s)
-const SIZE = [1.20, 1.80];   // rozmiar bazowy (m) — pojedyncza drobina, nie plama
+const MAX = 48;              // pula na obie strony — zapas na gęste fragmenty
+const LIFE = [2.0, 3.0];     // życie (s)
 const GRAV = 1.35;           // m/s² — lekka grawitacja: iskra płynie, nie spada
 const DRAG = 0.32;           // opór powietrza (1/s) — lot zwalnia, nie hamuje ostro
 const CORE_Y = 0.3;          // środek kuli (core.js: mesh.position.y)
 const FLOOR = 0.20;          // nie zapada się pod ziemię
 
+// Paleta iskier: ciemny żar → złoto → biały żar (sterowana centroidem „inne").
+const COLD = [1.00, 0.24, 0.03]; // ciemne widmo (pad, niski synth)
+const MID = [1.00, 0.62, 0.22];  // środek skali — złoto
+const WARM = [1.00, 0.96, 0.88]; // jasne widmo (arp, hi-hat) — biały żar
+
 const VERT = /* glsl */ `
 attribute float aSize;
 attribute float aAlpha;
-attribute float aTint;
+attribute vec3 aCol;
 varying float vA;
-varying float vT;
+varying vec3 vC;
 void main() {
   vA = aAlpha;
-  vT = aTint;
+  vC = aCol;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_PointSize = aSize * (430.0 / max(0.001, -mv.z));
   gl_Position = projectionMatrix * mv;
@@ -40,16 +48,19 @@ void main() {
 
 const FRAG = /* glsl */ `
 precision highp float;
-uniform vec3 uGold, uCream;
 varying float vA;
-varying float vT;
+varying vec3 vC;
 void main() {
-  // miękkie, okrągłe ziarno: halo + gorący środek (dwa różne temperatury)
+  // miękkie, okrągłe ziarno: halo + gorący środek
   float r = length(gl_PointCoord - 0.5) * 2.0;
   if (r > 1.0) discard;
   float soft = pow(1.0 - r, 2.2);
   float hot = pow(1.0 - r, 7.0);
-  vec3 col = mix(uGold, uCream, hot * 0.85);
+  // środek jaśniejszy, ale W BARWIE iskry: samo rozjaśnienie (bez mieszania
+  // z bielą) — inaczej tone mapping i bloom robiły z każdej iskry białą plamę
+  // i kolor z centroidu przestawał być widoczny
+  vec3 core = min(vec3(1.7), vC * 1.55 + vec3(0.05));
+  vec3 col = mix(vC, core, hot);
   float a = (soft * 0.75 + hot * 0.55) * vA;
   if (a < 0.004) discard;
   gl_FragColor = vec4(col * a, a); // additive: alpha w kolorze, reszta i tak sumuje
@@ -60,9 +71,9 @@ export class Sparks {
   constructor() {
     this.pos = new Float32Array(MAX * 3);
     this.vel = new Float32Array(MAX * 3);
+    this.col = new Float32Array(MAX * 3);
     this.size = new Float32Array(MAX);
     this.alpha = new Float32Array(MAX);
-    this.tint = new Float32Array(MAX);
     this.age = new Float32Array(MAX);
     this.life = new Float32Array(MAX);
     this.size0 = new Float32Array(MAX);
@@ -71,21 +82,19 @@ export class Sparks {
     this.alive = 0;
     this.spawned = 0;
     this.side = -1; // następna iskra: lewa (-1) czy prawa (+1)
+    this.lastLoud = 0;   // diagnostyka: czym ostatnio sterowano iskrą
+    this.lastBright = 0;
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
     geo.setAttribute("aSize", new THREE.BufferAttribute(this.size, 1));
     geo.setAttribute("aAlpha", new THREE.BufferAttribute(this.alpha, 1));
-    geo.setAttribute("aTint", new THREE.BufferAttribute(this.tint, 1));
+    geo.setAttribute("aCol", new THREE.BufferAttribute(this.col, 3));
     geo.setDrawRange(0, MAX);
 
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
-      uniforms: {
-        uGold: { value: new THREE.Color(PAL.goldBright) },
-        uCream: { value: new THREE.Color(PAL.cream) },
-      },
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
@@ -96,10 +105,15 @@ export class Sparks {
     this.geo = geo;
   }
 
-  // strength 0..1 — jak mocno `peak` przekroczył próg (wpływa na wielkość i lot)
+  // loud   0..1 — głośność akcentu (`peak` „inne") → rozmiar, prędkość, wysokość
+  // bright 0..1 — jasność widma (`centroid_hz`) → kolor i elewacja na kuli
   // radius — promień powierzchni kuli w tej chwili (core.surfaceRadius())
-  spawn(strength = 0.5, radius = 0.9) {
-    const s = Math.min(1, Math.max(0, strength));
+  spawn(loud = 0.5, bright = 0.5, radius = 0.9) {
+    const s = Math.min(1, Math.max(0, loud));
+    const b = Math.min(1, Math.max(0, bright));
+    this.lastLoud = s;
+    this.lastBright = b;
+
     const i = this.next;
     this.next = (this.next + 1) % MAX;
     const i3 = i * 3;
@@ -107,29 +121,43 @@ export class Sparks {
     const side = this.side;
     this.side = -this.side; // naprzemiennie: lewa, prawa, lewa…
 
-    // punkt NA POWIERZCHNI kuli, po bokach: elewacja od lekko w dół do ~+30°,
-    // azymut rozrzucony w głąb sceny, żeby iskry nie leciały po jednej linii
-    const elev = -0.22 + Math.random() * 0.75;
-    const azim = (Math.random() - 0.5) * 0.85;
+    // miejsce startu NA POWIERZCHNI kuli: elewacja z jasności widma
+    // (ciemne dźwięki z dołu, jasne z góry), azymut rozrzucony w głąb sceny
+    const elev = -0.30 + 0.62 * b + (Math.random() - 0.5) * 0.34;
+    // azymut przesunięty w stronę kamery (patrzy z +z): iskry po bokach kuli,
+    // ale po WIDOCZNEJ stronie — inaczej połowa rodziła się za kulą i ginęła
+    const azim = (Math.random() - 0.30) * 1.15;
     const r = radius * 1.02; // tuż nad powłoką — nie chowamy iskry w środku kuli
     const ce = Math.cos(elev), se = Math.sin(elev);
     this.pos[i3] = side * ce * Math.cos(azim) * r;
     this.pos[i3 + 1] = CORE_Y + se * r;
     this.pos[i3 + 2] = ce * Math.sin(azim) * r;
 
-    // wyrzut NA ZEWNĄTRZ (wzdłuż normalnej punktu) + stały komponent w górę,
+    // wyrzut NA ZEWNĄTRZ (wzdłuż normalnej punktu) + komponent w górę,
     // więc iskra wylatuje z boku kuli i unosi się łukiem, zamiast lecieć w dół
-    const sp = 1.50 + Math.random() * 1.10 + s * 0.45;
+    const sp = 1.25 + 1.35 * s + Math.random() * 0.45;
     this.vel[i3] = side * ce * Math.cos(azim) * sp;
-    this.vel[i3 + 1] = se * sp * 0.45 + 1.15 + Math.random() * 0.55 + s * 0.25;
+    this.vel[i3 + 1] = se * sp * 0.45 + 1.05 + 0.85 * s + Math.random() * 0.40;
     this.vel[i3 + 2] = ce * Math.sin(azim) * sp;
 
-    const life = LIFE[0] + Math.random() * (LIFE[1] - LIFE[0]) + s * 0.5;
+    // kolor: ciemny żar → złoto → biały żar
+    if (b < 0.5) {
+      const k = b / 0.5;
+      this.col[i3] = COLD[0] + (MID[0] - COLD[0]) * k;
+      this.col[i3 + 1] = COLD[1] + (MID[1] - COLD[1]) * k;
+      this.col[i3 + 2] = COLD[2] + (MID[2] - COLD[2]) * k;
+    } else {
+      const k = (b - 0.5) / 0.5;
+      this.col[i3] = MID[0] + (WARM[0] - MID[0]) * k;
+      this.col[i3 + 1] = MID[1] + (WARM[1] - MID[1]) * k;
+      this.col[i3 + 2] = MID[2] + (WARM[2] - MID[2]) * k;
+    }
+
     this.age[i] = 0;
-    this.life[i] = life;
-    this.size0[i] = (SIZE[0] + Math.random() * (SIZE[1] - SIZE[0])) * (0.85 + 0.35 * s);
+    this.life[i] = LIFE[0] + Math.random() * (LIFE[1] - LIFE[0]) + s * 0.5;
+    // głośny akcent = większa drobina (0.72–2.63 m)
+    this.size0[i] = (0.80 + 1.30 * s) * (0.90 + Math.random() * 0.25);
     this.size[i] = this.size0[i];
-    this.tint[i] = Math.random();
     this.alpha[i] = 0;
     this.phase[i] = Math.random() * Math.PI * 2;
     this.spawned++;
@@ -138,6 +166,7 @@ export class Sparks {
   reset() {
     this.pos.fill(0);
     this.vel.fill(0);
+    this.col.fill(0);
     this.alpha.fill(0);
     this.age.fill(0);
     this.life.fill(0);
@@ -147,6 +176,7 @@ export class Sparks {
     this.geo.attributes.position.needsUpdate = true;
     this.geo.attributes.aAlpha.needsUpdate = true;
     this.geo.attributes.aSize.needsUpdate = true;
+    this.geo.attributes.aCol.needsUpdate = true;
   }
 
   update(dt) {
@@ -190,5 +220,6 @@ export class Sparks {
     this.geo.attributes.position.needsUpdate = true;
     this.geo.attributes.aAlpha.needsUpdate = true;
     this.geo.attributes.aSize.needsUpdate = true;
+    this.geo.attributes.aCol.needsUpdate = true;
   }
 }
