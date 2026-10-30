@@ -4,9 +4,10 @@
 //   • „inne" -> KOLOR i JASNOŚĆ. Każdy onset przesuwa barwę (bursztyn -> szampańskie
 //     złoto) i podbija jasność; między onsetami kula jest przygaszonym żarem.
 //     Mocne, głośne dźwięki rozbłyskują kulę DO BIAŁY na ~0.15 s (uWhite).
-//   • „bas"  -> STRUKTURA. Poniżej ~0.55 basu kula jest gładka, powyżej 0.90 marszczy
-//     się na maksa; KAŻDY bit basu dodatkowo uderza w nią żebrem (uBeat) — mocna,
-//     czytelna zmiana faktury na każdym bicie.
+//   • „bas"  -> STRUKTURA. Poniżej ~0.50 basu kula jest gładka, powyżej 0.85
+//     falowanie jest najgłębsze; KAŻDY bit basu dodatkowo wzbiera powłokę (uBeat).
+//     Bas zmienia tylko amplitudę i tempo falowania — nigdy kierunek, więc nie
+//     robi wklęsnięć ani innych deformacji: kula zawsze zostaje kulą.
 //   • energia + głośność całości -> ROZMIAR. Najmocniejsze momenty rosną o ~85%.
 //   • bębny -> puls rozmiaru, wokal -> drobne drżenie powierzchni.
 //
@@ -15,22 +16,25 @@
 import * as THREE from "three";
 import { NOISE_GLSL, PAL } from "./glsl.js";
 
-// Przemieszczenie powierzchni wzdłuż normalnej: fałdy basu + żebro na uderzenie.
-// Zwraca wartość w jednostkach „wobbli", skalowaną potem przez uWobble.
+// Przemieszczenie powierzchni wzdłuż normalnej — WYŁĄCZNIE powłoka.
+// Pole jest radialne i nie ma wyróżnionego kierunku (suma szumów o średniej 0),
+// więc może tylko falować powierzchnię. Żadnych fal biegnących po kuli: sinus
+// `dot(n, dir)` wypychał jedną stronę i wklęsnął drugą — z tego brały się
+// „wklęśnięcia z jednej strony" i wygląd zmiętej kartki.
+// Bas reguluje WYŁĄCZNIE amplitudę i tempo falowania (mocniej/słabiej).
 const DISP_GLSL = /* glsl */ `
 uniform float uTime;
-uniform float uStruct;   // 0..1 — obecność basu: gęstszy, głębszy szum
-uniform float uBeat;     // 0..1 — impuls na KAŻDY bit basu: żebro po kuli
+uniform float uStruct;   // 0..1 — obecność basu: gęstsze, głębsze falowanie
+uniform float uBeat;     // 0..1 — impuls na KAŻDY bit basu: powłoka wzbiera
 float dispAt(vec3 n) {
-  float nf = 2.2 + uStruct * 2.6;
-  float d = snoise(n * nf + vec3(0.0, uTime * 0.55, 0.0)) * 0.70;
-  d += snoise(n * 6.0 - vec3(uTime * 0.35)) * 0.30;
-  // drugi, wolniejszy przebieg tylko od basu — szerokie pasma, nie drobny szum
-  d += snoise(n * (nf * 1.6) + vec3(uTime * 0.42)) * 0.45 * uStruct;
-  // UDERZENIE BASU: dwa żebra biegnące po kuli w różnych kierunkach
-  d += sin(dot(n, vec3(0.35, 1.0, 0.20)) * 5.5 - uTime * 5.5) * 1.35 * uBeat;
-  d += sin(dot(n, vec3(-0.80, 0.35, 0.60)) * 4.0 + uTime * 3.0) * 0.75 * uBeat;
-  return d;
+  // bicie basu przyspiesza falowanie (faktura „żyje" na bicie)...
+  float tt = uTime * (0.20 + 0.45 * uBeat);
+  float nf = 1.15 + uStruct * 0.85;           // 2-3 garby na kulę: 1.15 → 2.00
+  // ...i podbija amplitudę: ta sama powłoka, wyraźniejsze garby. Kierunku nie zmieniamy.
+  float amp = 0.40 + 0.55 * uStruct + 0.80 * uBeat;
+  float d = snoise(n * nf + vec3(0.0, tt, 0.0)) * 0.72;
+  d += snoise(n * (nf * 1.60) + vec3(tt * 0.45, tt * 0.28, 0.0)) * 0.12;
+  return d * amp;
 }
 `;
 
@@ -38,12 +42,16 @@ const VERT = /* glsl */ `
 uniform float uWobble;   // uTime, uStruct, uBeat deklaruje DISP_GLSL poniżej
 varying vec3 vN;
 varying vec3 vWorld;
+varying vec3 vObj;
+varying float vDisp;
 ${NOISE_GLSL}
 ${DISP_GLSL}
 void main() {
   vec3 n = normalize(position);
   float d0 = dispAt(n);
-  vec3 p = position + n * d0 * uWobble;
+  // bit basu wzbiera całą powłokę równomiernie (~2%) — to też nie deformuje kształtu
+  float breath = 1.0 + 0.02 * uBeat;
+  vec3 p = (position + n * d0 * uWobble) * breath;
 
   // Normalna z gradientu pola przemieszczenia (różnice skończone po stycznych):
   // bez tego fałdy widać tylko na sylwetce, a światło ich nie łapie.
@@ -54,8 +62,13 @@ void main() {
   float da = dispAt(normalize(n + ta * e));
   float db = dispAt(normalize(n + tb * e));
   vec3 grad = ta * ((da - d0) / e) + tb * ((db - d0) / e);
-  vec3 nP = normalize(n - grad * uWobble * 1.25);
+  // tłumienie dużych gradientów: bez niego normalna „przestrzeliwuje" i na kuli
+  // pojawiają się ostre, wielokątne crease'y zamiast miękkiego falowania
+  float damp = 1.0 / (1.0 + length(grad) * 0.8);
+  vec3 nP = normalize(n - grad * (uWobble * 1.60) * damp);
 
+  vObj = n;
+  vDisp = d0;
   vN = normalize(normalMatrix * nP);
   vec4 wp = modelMatrix * vec4(p, 1.0);
   vWorld = wp.xyz;
@@ -65,9 +78,15 @@ void main() {
 
 const FRAG = /* glsl */ `
 precision highp float;
+${NOISE_GLSL}
 uniform float uEnergy; // poziom żaru 0..1 — z „inne" (głośność + błysk)
 uniform float uGain;   // jasność — z „inne"
 uniform float uHot;    // 0..1 z centroidu „inne" — przesuwa bursztyn ku kremowi
+uniform float uTime;
+uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
+uniform float uBeat;    // bit basu — wzbiera falowanie jasności
+varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
+varying vec3 vObj;
 uniform float uFlash;  // 0..1 — kolorystyczny akcent na KAŻDYM onsiecie „inne"
 uniform float uWhite;  // 0..1 — mocny dźwięk: kula rozbłyskuje do bieli
 varying vec3 vN;
@@ -95,7 +114,14 @@ void main() {
 
   // jasność zmienia TYLKO głośność „inne" (uGain) i biel (uWhite); akcent barwy
   // (uFlash) nie podnosi jasności — inaczej kolor natychmiast przepalał się do bieli
-  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.05 + uWhite * 0.40);
+  // STRUKTURA BASU = falowanie powłoki: modulujemy JASNOŚĆ (nie geometrię),
+  // więc kula zawsze zostaje kulą — bez wklęsnięć i płaskich ścian.
+  // Jasność idzie ZA tym samym polem, które wypycha wierzchołki (vDisp), więc
+  // garby łapią światło, a doliny zostają ciemniejsze — czyta się jak powłoka,
+  // a nie jak plamy na kuli.
+  float relief = 1.0 + vDisp * (0.28 * uStruct + 0.34 * uBeat);
+  relief = clamp(relief, 0.65, 1.40);
+  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.05 + uWhite * 0.40) * relief;
   // miękki sufit: spokojny żar trzyma się PONIŻEJ odbarwienia (ACES nie myje go do
   // bieli), a rozjaśnienie otwiera go tylko do 1.22 — poświata bez przepalenia
   float cap = 0.72 + 0.26 * clamp(uWhite, 0.0, 1.0);
@@ -253,7 +279,7 @@ export class CoreSphere {
     // Amplituda przemieszczenia: spokój 1.8% promienia, pełne fałdy basu ~5.3%.
     // Żebro bitu (uBeat) siedzi w polu funkcji, więc dokłada się samo — razem
     // najgorszy przypadek ~20% promienia: mocno widać, kula się nie rozlatuje.
-    this.uniforms.uWobble.value = 0.018 + bassG * 0.035;
+    this.uniforms.uWobble.value = 0.016 + bassG * 0.026;
 
     this.mesh.scale.setScalar(this.scale);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,
