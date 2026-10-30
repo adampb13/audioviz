@@ -1,0 +1,19 @@
+# Python / venv
+.venv/
+__pycache__/
+*.pyc
+
+# node
+node_modules/
+
+# audio i stem-y: 400+ MB plików binarnych, odtwarzalne z separate.py / analyze_stems.py
+data/*.wav
+data/*.flac
+data/*/*.wav
+data/*/*.flac
+data/*/*.mp3
+
+# zrzuty z QA/podglądów
+*.png
+viz/out/
+scratch/

@@ -115,6 +115,7 @@ export class Track {
 
     // inne
     this.oRms = toF32(o.rms_norm);
+    this.oRmsP95 = percentile(o.rms_norm, 95) || 1; // do normalizacji głośności „inne"
     this.oCent = toF32(o.centroid_hz);
     this.oCentP95 = percentile(o.centroid_hz, 95) || 1;
     this.tempo = toF32(o.tempo_local_bpm || w.tempo_local_bpm, 120);
@@ -130,30 +131,23 @@ export class Track {
     this.onsetT = Float64Array.from(ons, (x) => x[0]);
     this.onsetS = Float32Array.from(ons, (x) => clamp(x[1] / onsStrP95, 0.05, 1));
 
-    // BŁYSK SFERY = rytm instrumentów ze stemu "inne" (beaty na siatce taktu).
-    // Surowych onsetów jest 756 na 190 s (~4/s) — błyskanie na każdym czyta się
-    // jak stroboskop, więc taktowanie bierzemy z beats, a siłę z najbliższego
-    // onsetu w oknie ±90 ms (poza oknem: miękki błysk 0.15).
-    const oBeats = Float64Array.from(S.inne.events.beats).sort((a, b2) => a - b2);
-    const oOns = (S.inne.events.hits || S.inne.events.onsets).slice().sort((a, b2) => a[0] - b2[0]);
-    const oOnsP95 = percentile(oOns.map((x) => x[1]), 95) || 1;
-    this.otherBeatT = oBeats;
-    this.otherBeatS = new Float32Array(oBeats.length);
-    let oj = 0;
-    for (let i = 0; i < oBeats.length; i++) {
-      const tt = oBeats[i];
-      while (oj + 1 < oOns.length && Math.abs(oOns[oj + 1][0] - tt) <= Math.abs(oOns[oj][0] - tt)) oj++;
-      const hit = Math.abs(oOns[oj][0] - tt) <= 0.09;
-      this.otherBeatS[i] = clamp(hit ? oOns[oj][1] / oOnsP95 : 0.15, 0.15, 1);
-    }
-
-    // MOCNE UDERZENIA BASU = źródło cząsteczek z rdzenia. Bas nie ma "hits",
-    // więc bierzemy jego onsety; p95 (6.2) jako mianownik daje progowi 0.42
-    // selekcję ~80 uderzeń na utwór (reszta to dudnienie podkładu).
-    const bOns = S.bas.events.onsets.slice().sort((a, b2) => a[0] - b2[0]);
-    const bOnsP95 = percentile(bOns.map((x) => x[1]), 95) || 1;
-    this.bassOnsetT = Float64Array.from(bOns, (x) => x[0]);
-    this.bassOnsetS = Float32Array.from(bOns, (x) => clamp(x[1] / bOnsP95, 0.02, 1));
+    // Onsety basu i „inne" osobno — sfera-serce reaguje na nie różnie: „inne"
+    // rozjaśnia, „bas" wypuszcza cząstki i zmienia strukturę. Ta sama
+    // normalizacja p95 co dla bębnów, żeby siła 1.0 znaczyła to samo.
+    const onsety = (stem) => {
+      const arr = (stem.events.onsets || []).slice().sort((a, b2) => a[0] - b2[0]);
+      const pr = percentile(arr.map((x) => x[1]), 95) || 1;
+      return [
+        Float64Array.from(arr, (x) => x[0]),
+        Float32Array.from(arr, (x) => clamp(x[1] / pr, 0.05, 1)),
+      ];
+    };
+    [this.bassOnsetT, this.bassOnsetS] = onsety(S.bas);
+    // Każdy BIT ścieżki „bas" (siatka beatów, nie onsety) — z niej sfera
+    // wypuszcza cząstki: "na każdy bit w basie", bez progu siły.
+    this.bassBeatT = toF32(S.bas.events.beats || []);
+    this.bassBeatS = new Float32Array(this.bassBeatT.length).fill(1);
+    [this.otherOnsetT, this.otherOnsetS] = onsety(S.inne);
 
     // Sekcje z wokalu (najlepiej oddaje strukturę zwrotka/refren)
     this.sections = S.wokal.events.sections.map(([s, e]) => ({ start: s, end: e }));

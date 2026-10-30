@@ -10,7 +10,6 @@ import { CoreSphere } from "./core.js";
 import { VocalRibbon } from "./ribbon.js";
 import { Mountains } from "./mountains.js";
 import { Atmosphere } from "./atmosphere.js";
-import { CoreBurst } from "./burst.js";
 import { createPost } from "./postfx.js";
 
 const params = new URLSearchParams(location.search);
@@ -76,23 +75,22 @@ const track = new Track(await resp.json());
 const ground = new Ground(PAL.fog, FOG_DENSITY);
 scene.add(ground.mesh);
 const core = new CoreSphere();
-scene.add(core.mesh);
+scene.add(core.group);
 const ribbon = new VocalRibbon();
 scene.add(ribbon.group);
+ribbon.resize(camera.aspect);
 const mountains = new Mountains(); // własna mgła per pasmo (nie scena FogExp2)
 scene.add(mountains.group);
+mountains.resize(window.innerWidth / window.innerHeight);
 const atmosphere = new Atmosphere();
 atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
-const burst = new CoreBurst();
-burst.setScale(renderer.getPixelRatio(), window.innerHeight, camera.fov);
-scene.add(burst.group);
 
 const post = createPost(renderer, scene, camera);
 
 // Sonda QA (?debug): dostęp do obiektów sceny dla zrzutów, pomiarów i bisectowania
 if (params.has("debug")) {
-  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere, burst };
+  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere };
 }
 
 // po utracie kontekstu render-targety trzeba zbudować od nowa
@@ -110,7 +108,8 @@ window.addEventListener("resize", () => {
   post.composer.setPixelRatio(renderer.getPixelRatio());
   post.composer.setSize(window.innerWidth, window.innerHeight);
   atmosphere.setPixelRatio(renderer.getPixelRatio());
-  burst.setScale(renderer.getPixelRatio(), window.innerHeight, camera.fov);
+  mountains.resize(camera.aspect);
+  ribbon.resize(camera.aspect);
 });
 
 // ---------- audio: 4 stem-y, master clock = pierwszy obecny ----------
@@ -128,27 +127,23 @@ const masterAudio = () => STEM_FILES.map((n) => audio[n]).find((el) => el && el.
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
-// Błysk sfery: beaty instrumentów ze stemu "inne" (rytm, nie stroboskop).
-const otherBeats = new EventCursor(track.otherBeatT, track.otherBeatS);
-// Cząsteczki z rdzenia: tylko mocne uderzenia basu.
-const bassOnsets = new EventCursor(track.bassOnsetT, track.bassOnsetS);
+// Sfera: „inne” steruje jasnością, mocny „bas” wypuszcza cząstki.
+const otherOnsets = new EventCursor(track.otherOnsetT, track.otherOnsetS);
+const bassBeats = new EventCursor(track.bassBeatT, track.bassBeatS);
+let lastOther = -1, lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
-  otherBeats.reset(t);
-  bassOnsets.reset(t);
+  otherOnsets.reset(t);
+  bassBeats.reset(t);
+  lastBurst = t - 2; // po przewinięciu nie strzelamy fajerwerkiem od razu
 }
-const smoothstep = (a, b, x) => {
-  const u = clamp((x - a) / (b - a), 0, 1);
-  return u * u * (3 - 2 * u);
-};
 
 // ---------- stan tłumiony (LERP: alpha=0.12 RMS, 0.08 pitch @60fps) ----------
 const S = {
   vRms: 0, vProb: 0, vMidi: 60, vCent: 0,
   bRms: 0, bCent: 0,
   dRms: 0, oRms: 0, oCent: 0, tempo: 120,
-  energy: 0, beatPulse: 0, otherFlash: 0, bassGate: 0,
-  wavesFired: 0, onsetsFired: 0, otherBeatsFired: 0, bursts: 0,
+  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
@@ -251,23 +246,13 @@ function frame() {
   // energia robi światło (sfera/bloom/exposure), NIE robi fal — wolna (audit P0-6)
   S.tempo = damp(S.tempo, tempoT, 3.0, dt);
   S.energy = damp(S.energy, energyT, 2.0, dt);
+  // wolna obwiednia TYLKO do detekcji dropu (τ≈2.5 s): trzyma „poziom tła",
+  // więc skok energii ponad nią = wejście z ciszy w głośną muzykę
+  S.dropEnv = damp(S.dropEnv, energyT, 2.5, dt);
   S.beatPulse *= Math.exp(-dt * 3.0);
-  // błysk sfery gaśnie szybciej niż puls bębnów (τ≈140 ms) — ma czytać się jako
-  // "błyskanie koloru" na instrument, a nie jako drugi, wolny oddech
-  S.otherFlash *= Math.exp(-dt * 7.0);
-  // "bas mocno obecny" = bRms powyżej mediany utworu (p50 0.52, p90 0.77).
-  // Wygładzenie asymetryczne (szybki atak, wolne zejście): bRms w sekcji z ósemkami
-  // skacze 0.22 <-> 0.74 co ~0.25 s, a struktura sfery ma się zmieniać PŁYNNIE
-  // (zasada nadrzędna: gładkość > reaktywność) — bez tego płaty trzepoczą.
-  {
-    const target = smoothstep(0.48, 0.74, S.bRms);
-    const k = 1 - Math.exp(-dt * (target > S.bassGate ? 6.0 : 1.8));
-    S.bassGate += (target - S.bassGate) * k;
-  }
 
   // uderzenia w bębny: fala na ziemi + JEDEN puls sfery, nic więcej
   onsets.poll(t, (_t0, s) => {
-    atmosphere.ignite(s); // iskierki: tylko błysk
     S.onsetsFired++;
     if (s < 0.02) return;              // próg tylko na cyfrową ciszę — każdy transient = fala
     if (t - lastWaveT < 0.05) return;  // dedupe 50 ms (detektor ma rozdzielczość 16.7 ms)
@@ -279,23 +264,38 @@ function frame() {
     S.beatPulse = Math.max(S.beatPulse, 0.10 + sn * 0.90); // sfera pulsuje raz, na ten sam atak
   });
 
-  // instrumenty ze stemu "inne": błysk koloru rdzenia na każdy ich beat
-  otherBeats.poll(t, (_t0, s) => {
-    S.otherFlash = Math.max(S.otherFlash, 0.38 + s * 0.62);
-    S.otherBeatsFired++;
-  });
-
-  // mocne uderzenia basu: wyrzut cząsteczek z rdzenia w niskie pasmo przy ziemi
-  bassOnsets.poll(t, (_t0, s) => {
-    if (s < 0.42) return; // dudnienie podkładu nie sypie drobinami
-    burst.emit(t, s, S.energy);
-    S.bursts++;
-  });
-
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
-  core.update(t, S.energy, S.beatPulse, S.vRms * S.vProb, S.vCent, S.otherFlash, S.bassGate);
-  burst.update(t);
+  // „inne” -> jasność na KAŻDYM onsiecie tej ścieżki (klawisze, nagłe dźwięki).
+  // Próg tylko na cyfrową ciszę; 40 ms dedupe (detektor: rozdzielczość 16.7 ms).
+  otherOnsets.poll(t, (_t0, s) => {
+    S.otherHits++;
+    if (s < 0.02 || t - lastOther < 0.04) return;
+    lastOther = t;
+    core.otherHit(s);
+  });
+  // KAŻDY bit „bas” -> cząstki z kuli (bez progu siły; pomijamy tylko bity,
+  // gdy bas w ogóle nie gra)
+  bassBeats.poll(t, () => {
+    S.bassHits++;
+    if (S.bRms < 0.12) return;
+    core.bassHit(clamp(S.bRms, 0.2, 1));
+  });
+  // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).
+  // Warunki: skok > 0.20, teraz naprawdę głośno (>0.55), tło jeszcze ciche
+  // (<0.42), edge + 1.4 s cooldown (obwiednia dogania skok przez ~0.5 s).
+  const jump = energyT - S.dropEnv;
+  if (jump > 0.20 && energyT > 0.55 && S.dropEnv < 0.42 && t - lastBurst > 1.4) {
+    lastBurst = t;
+    S.bursts++;
+    S.dropLog.push({ t: +t.toFixed(2), jump: +jump.toFixed(2), e: +energyT.toFixed(2), env: +S.dropEnv.toFixed(2) });
+    if (S.dropLog.length > 12) S.dropLog.shift();
+    core.dropBurst(clamp((jump - 0.15) / 0.55, 0.2, 1));
+  }
+
+  // głośność „inne" znormalizowana p95 — jedyny sygnał koloru/jasności sfery
+  const oRmsN = clamp(S.oRms / (track.oRmsP95 || 1), 0, 1);
+  core.update(t, dt, S.energy, S.beatPulse, S.bRms, oRmsN, S.oCent);
   ribbon.update(t, track, dt);
   atmosphere.update(t, dt, S.energy, S.tempo);
   // pełny exposure tylko w piku (audit v2 P1)
@@ -329,16 +329,13 @@ function frame() {
       `t ${t.toFixed(2)}  sec ${sec + 1}/${track.sections.length}  ` +
       `vR ${S.vRms.toFixed(2)} vP ${S.vProb.toFixed(2)} midi ${S.vMidi.toFixed(1)}  ` +
       `bR ${S.bRms.toFixed(2)} en ${S.energy.toFixed(2)} bp ${S.beatPulse.toFixed(2)}  ` +
-      `fl ${S.otherFlash.toFixed(2)} bg ${S.bassGate.toFixed(2)} cs ${S.bursts}  ` +
-      `waves ${S.wavesFired}  p95 ${fpsP95}fps  dc ${calls}`;
+      `waves ${S.wavesFired}  bursts ${S.bursts}  p95 ${fpsP95}fps  dc ${calls}`;
     window.__viz = {
       t, section: sec, sections: track.sections.length,
       vRms: S.vRms, vProb: S.vProb, vMidi: S.vMidi, vCent: S.vCent,
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
-      energy: S.energy, beatPulse: S.beatPulse,
-      otherFlash: S.otherFlash, bassGate: S.bassGate,
-      wavesFired: S.wavesFired, onsetsFired: S.onsetsFired,
-      otherBeatsFired: S.otherBeatsFired, bursts: S.bursts, fps,
+      energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
+      wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
       ctxLost, track: TRACK,

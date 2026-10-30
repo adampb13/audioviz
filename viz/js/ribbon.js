@@ -14,16 +14,23 @@ import * as THREE from "three";
 import { PAL } from "./glsl.js";
 import { sampleAt, clamp, damp } from "./data.js";
 
-const SEGS = 320;      // segmenty wzdłuż X (~0.28 m na segment)
+const SEGS = 320;      // segmenty wzdłuż X (~0.09 m na segment po zwężeniu)
 const ACROSS = 8;      // segmenty w poprzek (falloff krawędzi)
 const LAYERS = 3;
 const BASE_Y = 4.4;    // tuż nad horyzontem, daleko za sferą
 const BASE_Z = -28.0;
-const HALF_X = 45.0;   // pół szerokości kadru na głębokości BASE_Z (16:9)
-const TAPER = 0.12;    // 12% długości z każdej strony rozpuszcza się w punkt
+// Kadr na głębokości BASE_Z (16:9) ma pół szerokości 45 m. Wstęga zajmuje 1/3
+// szerokości ekranu i stoi wyśrodkowana, więc jej pół-szerokość = 45/3 = 15 m.
+const FRAME_HALF_X = 45.0;
+const WIDTH_FRAC = 1 / 3;
+const HALF_X = FRAME_HALF_X * WIDTH_FRAC;
+const TAPER = 0.22;    // 22% długości z każdej strony rozpuszcza się w punkt:
+                       // przy 12% koniec był widocznie ucięty, przy 30% wstęga
+                       // wyglądała jak wrzeciono (pełne ciało tylko w środku)
 
 const W_MIN = 0.16;    // cisza: cienka nić
-const W_MAX = 6.6;     // pełny śpiew: masywny pas
+const W_MAX = 4.6;     // pełny śpiew: masywny pas (6.6 m na 30-metrowej wstędze
+                       // dawało pas grubości 1/5 długości — wyglądał jak wałek)
 
 const s01 = (v) => v * v * (3.0 - 2.0 * v);   // smoothstep 0..1
 
@@ -33,6 +40,7 @@ uniform float uWidth;   // szerokość pasma [m] — z głośności wokalu
 uniform float uPitchY;  // płytki kontur melodii [m]
 uniform float uVoiced;  // brama frazy 0..1 (w ciszy 0 -> pasmo płaszczeje)
 uniform float uLayer;
+uniform float uHalfX;   // aktualna pół-szerokość wstęgi [m] — 1/3 szerokości okna
 varying vec2 vUv;
 varying vec3 vWorld;
 varying float vTaper;
@@ -40,7 +48,9 @@ varying float vWide;
 
 void main() {
   vUv = uv;
-  float x = position.x;
+  // x skalujemy do aktualnej pół-szerokości: przy zmianie proporcji okna
+  // wstęga trzyma 1/3 szerokości ekranu, a nie 1/3 z 16:9
+  float x = position.x * (uHalfX / ${HALF_X.toFixed(1)});
 
   // taper symetryczny: 0 na obu końcach kadru, 1 w środku
   float ax = abs(x) / ${HALF_X.toFixed(1)};
@@ -58,13 +68,16 @@ void main() {
   // wtedy pasmo jest prostą linią, nie drgającą resztką
   float amp = uVoiced;
   float y = ${BASE_Y.toFixed(2)} + uPitchY + (uLayer - 1.0) * 0.12 * taper;
-  y += sin(x * 0.075 + uPhase) * (0.20 + 2.00 * wide) * amp;
-  y += sin(x * 0.190 - uPhase * 0.72 + 1.7) * (0.06 + 0.60 * wide) * amp;
+  // częstotliwości ×3: kształt fali był strojony na pasmo 90 m, a wstęga ma
+  // teraz 30 m — bez tego cały przebieg mieścił się w 0.36 okresu i prostował
+  // się w świecącą deskę
+  y += sin(x * 0.225 + uPhase) * (0.20 + 2.00 * wide) * amp;
+  y += sin(x * 0.570 - uPhase * 0.72 + 1.7) * (0.06 + 0.60 * wide) * amp;
   y += (uv.y - 0.5) * w;
 
   // marszczenie w głąb sceny — ta sama faza, też gaśnie w ciszy
-  float zFold = (sin(x * 0.055 + uPhase * 0.55) * 2.2 * wide
-               + sin(x * 0.130 - uPhase * 0.35 + 0.9) * 0.8 * wide) * amp;
+  float zFold = (sin(x * 0.165 + uPhase * 0.55) * 2.2 * wide
+               + sin(x * 0.390 - uPhase * 0.35 + 0.9) * 0.8 * wide) * amp;
 
   vec4 wp = modelMatrix * vec4(x, y, zFold, 1.0);
   vWorld = wp.xyz;
@@ -128,6 +141,7 @@ export class VocalRibbon {
       const uniforms = {
         uPhase: { value: 0 },
         uLayer: { value: l },
+        uHalfX: { value: HALF_X },
         uWidth: { value: W_MIN },
         uPitchY: { value: 0 },
         uVoiced: { value: 0 },
@@ -167,6 +181,14 @@ export class VocalRibbon {
     this.holdLeft = 0;   // brama frazy: krótka przerwa nie gasi wstęgi
     this.rmsPeak = 0;
     this.lastT = undefined;
+  }
+
+  // Wstęga ma zajmować 1/3 szerokości OKNA przy dowolnej proporcji: pół-szerokość
+  // kadru na głębokości BASE_Z rośnie liniowo z aspectem (45 m dla 16:9), a wstęga
+  // to jej trzecia część. Bez tego 21:9 zwężało ją poniżej 1/3, a pion rozdymał.
+  resize(aspect) {
+    const halfX = FRAME_HALF_X * (aspect / (16 / 9)) * WIDTH_FRAC;
+    for (const u of this.layerMats) u.uHalfX.value = halfX;
   }
 
   update(t, track, dt) {

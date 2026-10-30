@@ -1,7 +1,5 @@
 // System 5: ATMOSFERA — kopuła nieba z gradientem (chmury prawie niewidoczne),
-// gwiazdy nad panoramą i 8 hero bokeh-iskier od onsetów bębnów.
-// Pył (250 drobin nisko nad ziemią) usunięty — jego rolę przejęły cząsteczki
-// wypuszczane z rdzenia na mocnych uderzeniach basu (burst.js).
+// gwiazdy na niebie i 8 hero bokeh-iskier od onsetów bębnów.
 import * as THREE from "three";
 import { NOISE_GLSL, PAL } from "./glsl.js";
 
@@ -75,26 +73,6 @@ void main() {
 }
 `;
 
-// ---------- iskry (bokeh) ----------
-function sparkTexture() {
-  const S = 128;
-  const cv = document.createElement("canvas");
-  cv.width = cv.height = S;
-  const ctx = cv.getContext("2d");
-  const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  g.addColorStop(0, "rgba(255,243,214,1)");
-  g.addColorStop(0.25, "rgba(255,207,138,0.55)");
-  g.addColorStop(0.6, "rgba(217,152,74,0.16)");
-  g.addColorStop(1, "rgba(217,152,74,0)");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, S, S);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
-}
-
-const SPARK_COUNT = 8; // hero bokeh jak na referencji
-
 export class Atmosphere {
   constructor() {
     this.group = new THREE.Group();
@@ -119,6 +97,10 @@ export class Atmosphere {
     sky.frustumCulled = false;
     sky.renderOrder = -10;
     this.group.add(sky);
+
+    // Pył nad ziemią usunięty: 250 drobin w pasmie y 0.2..4.0 leciało dokładnie
+    // nad falami i czytało się jako kasza/brud na obrazie, a nie jako powietrze.
+    // Zostają tylko 8 hero bokeh (od uderzeń bębnów) i gwiazdy na niebie.
 
     // gwiazdy — statyczne drobiny na sferze R=430, nad panoramą. Azimut zawężony
     // do sektora, który kamera faktycznie widzi (±65° od osi patrzenia), inaczej
@@ -180,31 +162,9 @@ export class Atmosphere {
     stars.renderOrder = 12;
     this.group.add(stars);
 
-    // iskry — sprite'y; puls zapalany onsetami bębnów
-    const tex = sparkTexture();
-    this.sparks = [];
-    for (let i = 0; i < SPARK_COUNT; i++) {
-      const mat = new THREE.SpriteMaterial({
-        map: tex,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        opacity: 0,
-      });
-      const sp = new THREE.Sprite(mat);
-      // jak na obrazie: głównie prawa strona, między ziemią a wstęgą, y 2..7
-      sp.position.set(
-        -20 + Math.random() * 55,
-        2.0 + Math.random() * 5.0,
-        -18 + Math.random() * 26
-      );
-      const baseSize = 0.6 + Math.random() * 0.6; // 0.6..1.2 m
-      sp.scale.setScalar(baseSize);
-      sp.renderOrder = 21;
-      this.sparks.push({ sp, mat, pulse: 0, phase: Math.random() * 6.28, baseSize });
-      this.group.add(sp);
-    }
-    this.sparkI = 0;
+    // Iskry (8 sprite'ów bokeh) usunięte: latały swobodnie po scenie bez związku
+    // z muzyką i czytały się jako przypadkowe plamy. Cząsteczki wypuszcza teraz
+    // wyłącznie sfera-serce, i tylko na uderzenie basu. Zostają gwiazdy.
   }
 
   // rozmiar gwiazd w CSS px niezależnie od DPR bufora
@@ -212,23 +172,8 @@ export class Atmosphere {
     this.starU.uScale.value = Math.min(Math.max(r, 1), 2);
   }
 
-  // siła onsetu 0.15..1 — zapala kolejną iskrę w karuzeli
-  ignite(strength) {
-    const s = this.sparks[this.sparkI];
-    this.sparkI = (this.sparkI + 1) % SPARK_COUNT;
-    s.pulse = Math.max(s.pulse, strength);
-  }
-
   update(t, dt, energySmooth, tempoBpm) {
     this.skyU.uTime.value = t * (tempoBpm / 120);
     this.starU.uTime.value = t;
-    for (const s of this.sparks) {
-      s.pulse *= Math.exp(-dt * 2.2);
-      const bob = Math.sin(t * 0.6 + s.phase) * 0.4;
-      s.sp.position.y += bob * dt;
-      const o = Math.min(0.85, s.pulse * 0.9 + 0.02);
-      s.mat.opacity = o;
-      s.sp.scale.setScalar(s.baseSize * (1 + s.pulse * 0.5));
-    }
   }
 }
