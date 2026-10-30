@@ -191,6 +191,12 @@ export class CoreSphere {
 
   // energySmooth: energia całości (rozmiar I rozświetlenie barwy);
   // beatPulse: puls bębnów (rozmiar); bassEnv: obecność basu (struktura).
+  // promień POWIERZCHNI kuli w danej chwili (puls + rozmiar) — z niego
+  // wylatują iskry, więc zawsze startują dokładnie na powłoce, nie w środku
+  surfaceRadius() {
+    return R_BASE * this.mesh.scale.x;
+  }
+
   update(t, dt, energySmooth, beatPulse, bassEnv) {
     // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia jest wygładzona
     // dwustronnie (atak 3.2/s, puszczenie 1.8/s), więc faktura „oddycha"

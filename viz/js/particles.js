@@ -6,9 +6,10 @@
 // przekroczenie wypada JEDNA iskra, naprzemiennie po lewej i prawej stronie kuli,
 // na ziemi tam, gdzie rozchodzą się fale (między kamerą a górami).
 //
-// Ruch: wyrzut w górę z grawitacją, powolny dryf na zewnątrz i delikatne
-// kołysanie; życie 2.6-3.6 s, wygaszanie w ostatnich 55% — iskra „spokojnie
-// opada i gaśnie", nigdy nie strzela i nie znika skokiem.
+// Ruch: iskra WYLATUJE Z POWIERZCHNI KULI (start na powłoce, po bokach), leci
+// na zewnątrz i w górę, potem grawitacja ściąga ją łukiem na ziemię; życie
+// 2.6-3.6 s, wygaszanie w ostatnich 55% — iskra „spokojnie opada i gaśnie",
+// nigdy nie strzela i nie znika skokiem.
 //
 // Zero zależności od FPS: wszystko dt-owane, pula stała (MAX), jeden draw call.
 import * as THREE from "three";
@@ -16,12 +17,11 @@ import { PAL } from "./glsl.js";
 
 const MAX = 24;              // pula na obie strony — więcej nie jest potrzebne
 const LIFE = [2.6, 3.6];     // życie (s)
-const SIZE = [1.05, 1.75];   // rozmiar bazowy (m) — pojedyncza drobina, nie plama
-const GRAV = 2.45;           // m/s² — opada wolniej niż spada kamień, „spokojnie"
-
-// Miejsce startu: ziemia po bokach kuli, w pasie między kamerą a górami
-// (góry stoją na z = -95/-175/-320, więc kadr „pod górami" to z ≈ -5..2).
-const SPOT = { x: [4.8, 8.4], z: [-6.0, 2.5], y: 0.22 };
+const SIZE = [1.20, 1.80];   // rozmiar bazowy (m) — pojedyncza drobina, nie plama
+const GRAV = 1.35;           // m/s² — lekka grawitacja: iskra płynie, nie spada
+const DRAG = 0.32;           // opór powietrza (1/s) — lot zwalnia, nie hamuje ostro
+const CORE_Y = 0.3;          // środek kuli (core.js: mesh.position.y)
+const FLOOR = 0.20;          // nie zapada się pod ziemię
 
 const VERT = /* glsl */ `
 attribute float aSize;
@@ -97,7 +97,8 @@ export class Sparks {
   }
 
   // strength 0..1 — jak mocno `peak` przekroczył próg (wpływa na wielkość i lot)
-  spawn(strength = 0.5) {
+  // radius — promień powierzchni kuli w tej chwili (core.surfaceRadius())
+  spawn(strength = 0.5, radius = 0.9) {
     const s = Math.min(1, Math.max(0, strength));
     const i = this.next;
     this.next = (this.next + 1) % MAX;
@@ -106,14 +107,22 @@ export class Sparks {
     const side = this.side;
     this.side = -this.side; // naprzemiennie: lewa, prawa, lewa…
 
-    this.pos[i3] = side * (SPOT.x[0] + Math.random() * (SPOT.x[1] - SPOT.x[0]));
-    this.pos[i3 + 1] = SPOT.y;
-    this.pos[i3 + 2] = SPOT.z[0] + Math.random() * (SPOT.z[1] - SPOT.z[0]);
+    // punkt NA POWIERZCHNI kuli, po bokach: elewacja od lekko w dół do ~+30°,
+    // azymut rozrzucony w głąb sceny, żeby iskry nie leciały po jednej linii
+    const elev = -0.22 + Math.random() * 0.75;
+    const azim = (Math.random() - 0.5) * 0.85;
+    const r = radius * 1.02; // tuż nad powłoką — nie chowamy iskry w środku kuli
+    const ce = Math.cos(elev), se = Math.sin(elev);
+    this.pos[i3] = side * ce * Math.cos(azim) * r;
+    this.pos[i3 + 1] = CORE_Y + se * r;
+    this.pos[i3 + 2] = ce * Math.sin(azim) * r;
 
-    // wyrzut w górę + lekki dryf NA ZEWNĄTRZ (od kuli), żeby iskra „uciekała" w bok
-    this.vel[i3] = side * (0.10 + Math.random() * 0.28);
-    this.vel[i3 + 1] = 2.00 + Math.random() * 0.90 + s * 0.50; // wierzchołek 0.8-2.4 m
-    this.vel[i3 + 2] = (Math.random() - 0.5) * 0.22;
+    // wyrzut NA ZEWNĄTRZ (wzdłuż normalnej punktu) + stały komponent w górę,
+    // więc iskra wylatuje z boku kuli i unosi się łukiem, zamiast lecieć w dół
+    const sp = 1.50 + Math.random() * 1.10 + s * 0.45;
+    this.vel[i3] = side * ce * Math.cos(azim) * sp;
+    this.vel[i3 + 1] = se * sp * 0.45 + 1.15 + Math.random() * 0.55 + s * 0.25;
+    this.vel[i3 + 2] = ce * Math.sin(azim) * sp;
 
     const life = LIFE[0] + Math.random() * (LIFE[1] - LIFE[0]) + s * 0.5;
     this.age[i] = 0;
@@ -157,7 +166,7 @@ export class Sparks {
 
       // grawitacja + opór powietrza: lot robi się coraz wolniejszy i miękki
       this.vel[i3 + 1] -= GRAV * dt;
-      const drag = Math.exp(-dt * 0.55);
+      const drag = Math.exp(-dt * DRAG);
       this.vel[i3] *= drag;
       this.vel[i3 + 2] *= drag;
 
@@ -166,8 +175,8 @@ export class Sparks {
       this.pos[i3] += (this.vel[i3] + sway) * dt;
       this.pos[i3 + 1] += this.vel[i3 + 1] * dt;
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
-      if (this.pos[i3 + 1] < SPOT.y) { // nie zapada się pod ziemię
-        this.pos[i3 + 1] = SPOT.y;
+      if (this.pos[i3 + 1] < FLOOR) { // nie zapada się pod ziemię
+        this.pos[i3 + 1] = FLOOR;
         this.vel[i3 + 1] *= -0.18; // miękkie odbicie — i tak zaraz gaśnie
       }
 

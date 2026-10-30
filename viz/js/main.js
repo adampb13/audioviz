@@ -88,9 +88,9 @@ mountains.resize(window.innerWidth / window.innerHeight);
 const atmosphere = new Atmosphere();
 atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
-// Pojedyncze iskry po bokach kuli: jedna drobina na przekroczenie progu `peak`
-// ścieżki „inne" (próg w pętli), naprzemiennie lewa/prawa, na ziemi tam, gdzie
-// rozchodzą się fale. Nie chmura, nie fontanna — rzadki akcent (particles.js).
+// Pojedyncze iskry wylatujące Z KULI: jedna drobina na przekroczenie progu `peak`
+// ścieżki „inne" (próg w pętli), naprzemiennie lewa/prawa, start na powłoce sfery
+// i łuk na zewnątrz nad fale. Nie chmura, nie fontanna — rzadki akcent (particles.js).
 const sparks = new Sparks();
 scene.add(sparks.points);
 
@@ -391,7 +391,7 @@ function frame() {
     if (oPeakPrev < SPARK_PEAK && oPeakRaw >= SPARK_PEAK && t - lastSpark > 0.35) {
       lastSpark = t;
       const st = clamp((oPeakRaw - SPARK_PEAK) / Math.max(0.02, 0.62 - SPARK_PEAK), 0, 1);
-      sparks.spawn(0.35 + 0.65 * st);
+      sparks.spawn(0.35 + 0.65 * st, core.surfaceRadius());
       S.sparksFired++;
     }
     oPeakPrev = oPeakRaw;
