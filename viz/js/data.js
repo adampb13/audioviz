@@ -148,6 +148,17 @@ export class Track {
     this.bassBeatT = toF32(S.bas.events.beats || []);
     this.bassBeatS = new Float32Array(this.bassBeatT.length).fill(1);
     [this.otherOnsetT, this.otherOnsetS] = onsety(S.inne);
+    // AKCENTY melodyczne „inne" (detect_accents.py): piki obwiedni w paśmie
+    // 250-4000 Hz ocenione prominencją × głośnością. Sfera rozbłyska TYLKO na
+    // nich — sila onsetu koreluje ze „znaczącym uderzeniem" tylko w ~0.58.
+    if (S.inne.events.accents && S.inne.events.accents.length) {
+      const acc = S.inne.events.accents.slice().sort((a, b2) => a[0] - b2[0]);
+      this.accentT = Float64Array.from(acc, (x) => x[0]);
+      this.accentS = Float32Array.from(acc, (x) => clamp(x[1], 0, 1));
+    } else {
+      this.accentT = this.otherOnsetT;   // fallback: utwór bez akcentów
+      this.accentS = this.otherOnsetS;
+    }
 
     // Sekcje z wokalu (najlepiej oddaje strukturę zwrotka/refren)
     this.sections = S.wokal.events.sections.map(([s, e]) => ({ start: s, end: e }));

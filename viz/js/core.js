@@ -121,7 +121,7 @@ void main() {
   // a nie jak plamy na kuli.
   float relief = 1.0 + vDisp * (0.28 * uStruct + 0.34 * uBeat);
   relief = clamp(relief, 0.65, 1.40);
-  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.03 + uWhite * 0.40) * relief;
+  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.03 + uWhite * 0.58) * relief;
   // miękki sufit: spokojny żar trzyma się PONIŻEJ odbarwienia (ACES nie myje go do
   // bieli), a rozjaśnienie otwiera go tylko do 1.22 — poświata bez przepalenia
   float cap = 0.72 + 0.26 * clamp(uWhite, 0.0, 1.0);
@@ -208,21 +208,18 @@ export class CoreSphere {
     this.scale = 1; // wygładzony rozmiar (energia + puls bębnów)
   }
 
-  // KAŻDY onset w „inne" — źródło koloru i jasności. Niski próg, bo ciche
-  // klawisze też mają zmienić barwę; akcenty dostają pełną moc i biel.
+  // AKCENT melodyczny „inne" (detect_accents.py). `s` = siła akcentu (0..1),
+  // `strong` = czy to akcent >= 0.75 (ewidentne, wyeksponowane uderzenie).
+  // Ciepły akcent daje samą barwę; dopiero mocny akcent rozjaśnia ku bieli.
   otherHit(strength, loudness = 1) {
     const s = Math.min(1, Math.max(0, strength));
-    // Akcent barwy tylko na ewidentnym uderzeniu (main.js już je odfiltrował):
-    // pełna moc przy mocnym transientcie, żadnego stałego tła błysku.
-    this.flash = Math.max(this.flash, 0.45 + 0.55 * s);
-    // Biel dopiero wtedy, gdy jest naprawdę głośno (loudness = energia całości)
-    // i transient jest mocny — i tylko jako rozjaśnienie z poświatą, nie błysk.
-    // bramka na głośność SAMEJ ścieżki „inne" (loudness = oRms/oRmsP95), nie na
-    // energię całości: inaczej po wyciszeniu basu ciche klawisze nie rozjaśniają
-    // kuli, a w pełnym miksie rozjaśniał ją bas.
-    // sufit 0.85: rozjaśnienie z poświatą, nigdy lampa błyskowa
-    const w = Math.min(0.80, ss(0.34, 0.70, loudness) * (0.30 + 0.70 * s));
-    if (w > 0.10) this.white = Math.max(this.white, w);
+    this.flash = Math.max(this.flash, 0.40 + 0.60 * s);
+    // Rozjaśnienie dostaje KAŻDY akcent z listy (lista jest już przefiltrowana do
+    // 0.33/s — non-max suppression w detect_accents.py), a jego moc skaluje się
+    // salience'em: najważniejsze uderzenie świeci najmocniej. Głośność SAMEJ
+    // ścieżki „inne" (nie miks — inaczej bas decydowałby o bieli).
+    const w = Math.min(0.85, (0.22 + 0.78 * s) * (0.50 + 0.50 * ss(0.10, 0.62, loudness)));
+    this.white = Math.max(this.white, w);
   }
 
   // DROP: bas uderza mocniej — struktura dostaje grubsze żebro. Koloru NIE
@@ -247,7 +244,7 @@ export class CoreSphere {
     const kb = bassEnv > this.bass ? 9.0 : 2.4;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
     this.flash *= Math.exp(-dt * 6.5); // krótki akcent: każdy klawisz osobno
-    this.white *= Math.exp(-dt * 7.5); // biel tylko na chwilę
+    this.white *= Math.exp(-dt * 5.0); // biel ~0.2 s — widoczna, ale nie lampa
     this.beat *= Math.exp(-dt * 7.0);  // żebro basu znika w ~0.2 s
 
     // JASNOŚĆ/KOLOR — wyłącznie „inne". Głośność ciągła + akcent onsetu,

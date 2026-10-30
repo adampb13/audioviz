@@ -137,14 +137,16 @@ if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
-const recent = []; // ostatnie siły uderzeń „inne” — adaptacyjny próg rozbłysku
 // Sfera: „inne” steruje jasnością, mocny „bas” wypuszcza cząstki.
 const otherOnsets = new EventCursor(track.otherOnsetT, track.otherOnsetS);
+// Akcenty melodyczne „inne” — to one dają rozbłysk (patrz detect_accents.py).
+const accents = new EventCursor(track.accentT, track.accentS);
 const bassBeats = new EventCursor(track.bassBeatT, track.bassBeatS);
 let lastOther = -1, lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
   otherOnsets.reset(t);
+  accents.reset(t);
   bassBeats.reset(t);
   lastBurst = t - 2; // po przewinięciu nie strzelamy fajerwerkiem od razu
 }
@@ -302,21 +304,15 @@ function frame() {
   ground.update(t, S.energy, S.beatPulse);
   // „inne” -> jasność na KAŻDYM onsiecie tej ścieżki (klawisze, nagłe dźwięki).
   // Próg tylko na cyfrową ciszę; 40 ms dedupe (detektor: rozdzielczość 16.7 ms).
-  otherOnsets.poll(t, (_t0, s) => {
-    S.otherHits++;
-    if (!g.inne) return;               // wyciszone „inne” = sfera bez błysków
-    // „inne” ma 750+ onsetów na utwór (~4/s). Reakcja na każdy z nich to chaos,
-    // więc rozbłysk dostają TYLKO ewidentne uderzenia: siła ≥ 0.62 p95 ORAZ
-    // wyraźnie ponad średnią z ostatnich uderzeń (adaptacyjnie, bo arpeggio ma
-    // gęste ale równe uderzenia — wtedy nie błyska wcale).
-    recent.push(s);
-    if (recent.length > 14) recent.shift();
-    if (s < 0.62) return;
-    if (recent.length >= 6) {
-      const med = recent.slice(0, -1).slice().sort((a, b) => a - b)[Math.floor((recent.length - 1) / 2)];
-      if (s < med * 1.18) return;
-    }
-    if (t - lastOther < 0.34) return;  // refractor: max ~3 rozbłyski na sekundę
+  // Akcenty „inne”: 461 pików na utwór, ale tylko część to ZNACZĄCE uderzenia
+  // melodii. Trzy progi: <0.45 cisza (ozdobniki), 0.45-0.75 ciepły akcent,
+  // >=0.75 pełny rozbłysk do bieli. Refractory 0.20 s, bo akcenty i tak są
+  // rzadkie (~0.9/s), a przy gęstym motywie nie chcemy stroboskopu.
+  accents.poll(t, (_t0, s) => {
+    S.accentsFired = (S.accentsFired || 0) + 1;
+    if (!g.inne) return;
+    if (s < 0.45) return;
+    if (t - lastOther < 0.20) return;
     lastOther = t;
     S.otherFlash++;
     core.otherHit(s, clamp(S.oRms / (track.oRmsP95 || 1), 0, 1));
@@ -386,7 +382,7 @@ function frame() {
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
-      otherHits: S.otherHits, otherFlash: S.otherFlash,
+      otherHits: S.otherHits, otherFlash: S.otherFlash, accentsFired: S.accentsFired || 0,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
       core: { flash: core.flash, white: core.white, beat: core.beat, scale: core.scale,
