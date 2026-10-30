@@ -102,11 +102,11 @@ void main() {
   vec3 hot = mix(vec3(1.0, 0.52, 0.16), vec3(1.0, 0.66, 0.32), uHot * 0.45);
   vec3 base = mix(deep, hot, clamp(uEnergy, 0.0, 1.0));
 
-  // BIT „inne" = przesunięcie BARWY, nie tylko jasności: bursztyn -> szampańskie
-  // złoto (chłodniejsze, jaśniejsze), gaśnie w ~0.15 s po onsiecie
-  // na bit „inne" kula się ZARUMIENIA: głębsza, bardziej nasycona czerwień
-  vec3 beatTint = vec3(1.0, 0.24, 0.08);
-  base = mix(base, beatTint, clamp(uFlash * 0.95, 0.0, 1.0));
+  // EWIDENTNE uderzenie „inne" = lekkie ocieplenie barwy (bursztyn -> miód),
+  // NIE czerwony błysk: mocne przesunięcie koloru na każdym uderzeniu czytało
+  // się jako chaos. Akcent ma być subtelny i krótki.
+  vec3 beatTint = vec3(1.0, 0.60, 0.34);
+  base = mix(base, beatTint, clamp(uFlash * 0.30, 0.0, 1.0));
 
   // MOCNE uderzenie „inne" (klawisze): kolor idzie w stronę ciepłej bieli,
   // ale tylko do połowy i przez jasność — ma być GLOW, nie błysk lampy.
@@ -121,7 +121,7 @@ void main() {
   // a nie jak plamy na kuli.
   float relief = 1.0 + vDisp * (0.28 * uStruct + 0.34 * uBeat);
   relief = clamp(relief, 0.65, 1.40);
-  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.05 + uWhite * 0.40) * relief;
+  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.03 + uWhite * 0.40) * relief;
   // miękki sufit: spokojny żar trzyma się PONIŻEJ odbarwienia (ACES nie myje go do
   // bieli), a rozjaśnienie otwiera go tylko do 1.22 — poświata bez przepalenia
   float cap = 0.72 + 0.26 * clamp(uWhite, 0.0, 1.0);
@@ -202,6 +202,7 @@ export class CoreSphere {
     this.flash = 0; // akcent kolorystyczny od pojedynczego uderzenia „inne"
     this.white = 0; // rozbłysk do bieli od mocnego dźwięku
     this.glow = 0;  // WYGŁADZONY żar: głośność „inne" + błysk (0..1)
+    this.hot = 0.5; // wygładzona temperatura barwy (centroid „inne")
     this.bass = 0;  // obecność basu (struktura)
     this.beat = 0;  // impuls struktury na bit basu
     this.scale = 1; // wygładzony rozmiar (energia + puls bębnów)
@@ -211,15 +212,17 @@ export class CoreSphere {
   // klawisze też mają zmienić barwę; akcenty dostają pełną moc i biel.
   otherHit(strength, loudness = 1) {
     const s = Math.min(1, Math.max(0, strength));
-    this.flash = Math.max(this.flash, 0.30 + 0.70 * s);
+    // Akcent barwy tylko na ewidentnym uderzeniu (main.js już je odfiltrował):
+    // pełna moc przy mocnym transientcie, żadnego stałego tła błysku.
+    this.flash = Math.max(this.flash, 0.45 + 0.55 * s);
     // Biel dopiero wtedy, gdy jest naprawdę głośno (loudness = energia całości)
     // i transient jest mocny — i tylko jako rozjaśnienie z poświatą, nie błysk.
     // bramka na głośność SAMEJ ścieżki „inne" (loudness = oRms/oRmsP95), nie na
     // energię całości: inaczej po wyciszeniu basu ciche klawisze nie rozjaśniają
     // kuli, a w pełnym miksie rozjaśniał ją bas.
     // sufit 0.85: rozjaśnienie z poświatą, nigdy lampa błyskowa
-    const w = Math.min(0.85, ss(0.38, 0.74, loudness) * (0.40 + 0.65 * s));
-    if (w > 0.06) this.white = Math.max(this.white, w);
+    const w = Math.min(0.80, ss(0.34, 0.70, loudness) * (0.30 + 0.70 * s));
+    if (w > 0.10) this.white = Math.max(this.white, w);
   }
 
   // DROP: bas uderza mocniej — struktura dostaje grubsze żebro. Koloru NIE
@@ -249,8 +252,10 @@ export class CoreSphere {
 
     // JASNOŚĆ/KOLOR — wyłącznie „inne". Głośność ciągła + akcent onsetu,
     // wygładzone obwiednią, żeby kolor płynął, a nie przeskakiwał.
-    const target = Math.min(1, otherLoud * 0.95 + this.flash * 0.60);
-    const kg = target > this.glow ? 7.0 : 3.0;
+    // Jasność: spokojna obwiednia głośności „inne” (bez skoków na każdą nutę) +
+    // niewielki dodatek od pojedynczego, ewidentnego uderzenia.
+    const target = Math.min(1, ss(0.10, 0.86, otherLoud) * 0.90 + this.flash * 0.12);
+    const kg = target > this.glow ? 2.2 : 1.2;
     this.glow += (target - this.glow) * (1 - Math.exp(-dt * kg));
 
     // ROZMIAR — sumaryczna energia i głośność muzyki. Krzywa potęgowa, żeby
@@ -268,7 +273,9 @@ export class CoreSphere {
     const bassG = q * q * (3 - 2 * q);
     this.uniforms.uStruct.value = bassG;
     this.uniforms.uBeat.value = this.beat;
-    this.uniforms.uHot.value = otherCent;
+    // temperatura barwy też płynie wolno — centroid skacze z każdą nutą
+    this.hot += (otherCent - this.hot) * (1 - Math.exp(-dt * 1.6));
+    this.uniforms.uHot.value = this.hot;
     // szeroki, ale niezbyt przepalony zakres: ciemny bursztyn -> jasne złoto
     this.uniforms.uEnergy.value = 0.05 + this.glow * 0.78;
     // Jasność trzymana PONIŻEJ progu blooma: kula ma czytać się jako bursztyn

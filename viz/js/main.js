@@ -137,6 +137,7 @@ if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
+const recent = []; // ostatnie siły uderzeń „inne” — adaptacyjny próg rozbłysku
 // Sfera: „inne” steruje jasnością, mocny „bas” wypuszcza cząstki.
 const otherOnsets = new EventCursor(track.otherOnsetT, track.otherOnsetS);
 const bassBeats = new EventCursor(track.bassBeatT, track.bassBeatS);
@@ -152,8 +153,8 @@ function resetCursors(t) {
 const S = {
   vRms: 0, vProb: 0, vMidi: 60, vCent: 0,
   bRms: 0, bCent: 0,
-  dRms: 0, oRms: 0, oCent: 0, tempo: 120,
-  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
+  dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120,
+  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, otherFlash: 0, bassHits: 0, bursts: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
@@ -271,6 +272,9 @@ function frame() {
   S.bCent = damp(S.bCent, bCentT, 5.0, dt);
   S.dRms = damp(S.dRms, dRmsT, 7.7, dt);
   S.oRms = damp(S.oRms, oRmsT, 7.7, dt);
+  // wolna obwiednia głośności „inne” — steruje jasnością kuli, więc nie może
+  // podskakiwać na każdą nutę (7.7/s dawało migotanie)
+  S.oSlow = damp(S.oSlow, oRmsT, 1.7, dt);
   S.oCent = damp(S.oCent, oCentT, 5.0, dt);
   // energia robi światło (sfera/bloom/exposure), NIE robi fal — wolna (audit P0-6)
   S.tempo = damp(S.tempo, tempoT, 3.0, dt);
@@ -301,8 +305,20 @@ function frame() {
   otherOnsets.poll(t, (_t0, s) => {
     S.otherHits++;
     if (!g.inne) return;               // wyciszone „inne” = sfera bez błysków
-    if (s < 0.02 || t - lastOther < 0.04) return;
+    // „inne” ma 750+ onsetów na utwór (~4/s). Reakcja na każdy z nich to chaos,
+    // więc rozbłysk dostają TYLKO ewidentne uderzenia: siła ≥ 0.62 p95 ORAZ
+    // wyraźnie ponad średnią z ostatnich uderzeń (adaptacyjnie, bo arpeggio ma
+    // gęste ale równe uderzenia — wtedy nie błyska wcale).
+    recent.push(s);
+    if (recent.length > 14) recent.shift();
+    if (s < 0.62) return;
+    if (recent.length >= 6) {
+      const med = recent.slice(0, -1).slice().sort((a, b) => a - b)[Math.floor((recent.length - 1) / 2)];
+      if (s < med * 1.18) return;
+    }
+    if (t - lastOther < 0.34) return;  // refractor: max ~3 rozbłyski na sekundę
     lastOther = t;
+    S.otherFlash++;
     core.otherHit(s, clamp(S.oRms / (track.oRmsP95 || 1), 0, 1));
   });
   // KAŻDY bit „bas” -> mocna zmiana STRUKTURY kuli (żebro biegnące po powierzchni).
@@ -327,8 +343,8 @@ function frame() {
   }
 
   // głośność „inne" znormalizowana p95 — jedyny sygnał koloru/jasności sfery
-  const oRmsN = clamp(S.oRms / (track.oRmsP95 || 1), 0, 1);
-  core.update(t, dt, S.energy, S.beatPulse, S.bRms, oRmsN, S.oCent);
+  const oSlowN = clamp(S.oSlow / (track.oRmsP95 || 1), 0, 1);
+  core.update(t, dt, S.energy, S.beatPulse, S.bRms, oSlowN, S.oCent);
   ribbon.update(t, track, dt, g.wokal);
   atmosphere.update(t, dt, S.energy, S.tempo);
   // pełny exposure tylko w piku (audit v2 P1)
@@ -370,6 +386,7 @@ function frame() {
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
+      otherHits: S.otherHits, otherFlash: S.otherFlash,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
       core: { flash: core.flash, white: core.white, beat: core.beat, scale: core.scale,
