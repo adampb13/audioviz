@@ -10,6 +10,7 @@ import { CoreSphere } from "./core.js";
 import { VocalRibbon } from "./ribbon.js";
 import { Mountains } from "./mountains.js";
 import { Atmosphere } from "./atmosphere.js";
+import { SideParticles } from "./particles.js";
 import { createPost } from "./postfx.js";
 import { createSettings } from "./settings.js";
 
@@ -86,12 +87,15 @@ mountains.resize(window.innerWidth / window.innerHeight);
 const atmosphere = new Atmosphere();
 atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
+// cząstki boczne — tylko na ewidentne duże piki „inne”
+const particles = new SideParticles();
+scene.add(particles.points);
 
 const post = createPost(renderer, scene, camera);
 
 // Sonda QA (?debug): dostęp do obiektów sceny dla zrzutów, pomiarów i bisectowania
 if (params.has("debug")) {
-  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere };
+  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere, particles };
 }
 
 // po utracie kontekstu render-targety trzeba zbudować od nowa
@@ -127,10 +131,13 @@ const masterAudio = () => STEM_FILES.map((n) => audio[n]).find((el) => el && el.
 // ---------- panel ścieżek (przycisk w lewym dolnym rogu) ----------
 // Wyciszenie ścieżki = `muted` na audio ORAZ gain 0 na jej sygnale w pętli,
 // więc test „co robi sam bas / sam wokal" nie wymaga grzebania w kodzie.
-const settings = createSettings((id, on) => {
-  const el = audio[id];
-  if (el) el.muted = !on;
-});
+const settings = createSettings(
+  (id, on) => {
+    const el = audio[id];
+    if (el) el.muted = !on;
+  },
+  () => restartTrack()
+);
 if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio; }
 
 // ---------- zdarzenia (triggery impulsowe, bez interpolacji) ----------
@@ -141,6 +148,23 @@ let lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
   lastBurst = t - 2; // po przewinięciu nie strzelamy fajerwerkiem od razu
+  S.innePeakT = t - 2;
+}
+
+// „od początku”: audio, zegar demo, kursory zdarzeń, fale na ziemi i cząstki.
+// Stan odtwarzania zostaje — jeśli grało, gra dalej, tylko od 0 s.
+function restartTrack() {
+  const els = STEM_FILES.map((n) => audio[n]).filter(Boolean);
+  for (const el of els) {
+    try { el.currentTime = 0; } catch (e) { /* niegotowy strumień — zegar i tak wróci do 0 */ }
+  }
+  demoT = 0;
+  pausedAt = null;
+  resetCursors(0);
+  ground.reset();
+  particles.reset();
+  if (playing) for (const el of els) el.play().catch(() => {});
+  if (window.__viz) window.__viz.t = 0;
 }
 
 // ---------- stan tłumiony (LERP: alpha=0.12 RMS, 0.08 pitch @60fps) ----------
@@ -149,8 +173,10 @@ const S = {
   bRms: 0, bCent: 0,
   dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120,
   energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
+  innePeakT: -10, inneBursts: 0, // ewidentne piki „inne” -> cząstki boczne
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
+if (window.__dbg) window.__dbg.S = S;
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
 const fpsHist = new Float32Array(240);
 let fpsI = 0, fpsN = 0;
@@ -159,6 +185,8 @@ let fpsI = 0, fpsN = 0;
 const btn = document.getElementById("start");
 const overlay = document.getElementById("overlay");
 const hud = document.getElementById("hud");
+// informacje domyślnie schowane — klawisz H pokazuje/ukrywa podgląd stanu
+hud.classList.add("off");
 let playing = false;
 let demoMode = params.has("demo");
 let demoT = parseFloat(params.get("t") || "0") || 0;
@@ -207,7 +235,7 @@ window.addEventListener("keydown", (e) => {
   // zasłona overlay włączała się i wyłączała kilkanaście razy na sekundę)
   if (e.repeat) return;
   if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
-  else if (e.code === "KeyH") { hud.hidden = !hud.hidden; }
+  else if (e.code === "KeyH") { hud.classList.toggle("off"); }
 });
 if (demoMode) overlay.classList.add("hidden");
 resetCursors(demoT);
@@ -309,6 +337,19 @@ function frame() {
     if (S.dropLog.length > 12) S.dropLog.shift();
   }
 
+  // EWIDENTNE duże piki „inne” → wybuch cząstek po lewej i prawej stronie sceny.
+  // Detekcja: atak głośności ponad wolną obwiednię (τ 1.7 s, ta sama co wcześniej
+  // do jasności) + próg głośności + refrakcja 1.2 s. Progi zmierzone na pełnym
+  // utworze (dokładnie te filtry: damp 7.7/s i 1.7/s): ~30 zdarzeń na 203 s,
+  // czyli 1-4 na 20 s — wyraźny akcent, a nie ciągły dym.
+  const oAtk = S.oRms - S.oSlow;
+  if (g.inne && S.oRms > 0.30 && oAtk > 0.11 && t - S.innePeakT > 1.2) {
+    S.innePeakT = t;
+    S.inneBursts++;
+    particles.burst(clamp(oAtk / 0.25, 0.35, 1));
+  }
+  particles.update(dt);
+
   // kolor sfery jest stały — żadna ścieżka go nie zmienia
   core.update(t, dt, S.energy, S.beatPulse, S.bRms);
   ribbon.update(t, track, dt, g.wokal);
@@ -352,6 +393,7 @@ function frame() {
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
+      innePeaks: S.inneBursts, particlesAlive: particles.alive,
       otherHits: S.otherHits,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,

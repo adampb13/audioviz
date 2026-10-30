@@ -3,14 +3,15 @@
 // (słychać, co wypada) i zeruje gain sygnału w main.js (widać, co znika z animacji),
 // więc każdą interakcję „ścieżka → obiekt" można testować osobno.
 //
-// Wejście: onToggle(id, on) — main.js wycisza tam audio. Wyjście: { gain, ... }
+// Wejście: onToggle(id, on) — main.js wycisza tam audio; onRestart() — odtwarza
+// utwór od 0 s (zegar, kursory zdarzeń, fale, cząstki). Wyjście: { gain, ... }
 // gdzie gain[id] ∈ {0,1} czyta pętla klatek.
 
 export const STEMS = [
   { id: "wokal", label: "wokal", hint: "wstęga" },
-  { id: "bas", label: "bas", hint: "struktura · cząstki" },
+  { id: "bas", label: "bas", hint: "struktura" },
   { id: "bebny", label: "bebny", hint: "fale · puls" },
-  { id: "inne", label: "inne", hint: "blask sfery" },
+  { id: "inne", label: "inne", hint: "piki · cząstki" },
 ];
 
 const GEAR =
@@ -19,7 +20,7 @@ const GEAR =
   '<path d="M12 2.8v2.1M12 19.1v2.1M4.4 12H2.3M21.7 12h-2.1M6.7 6.7 5.2 5.2' +
   'M18.8 18.8l-1.5-1.5M17.3 6.7l1.5-1.5M5.2 18.8l1.5-1.5"/></svg>';
 
-export function createSettings(onToggle = () => {}) {
+export function createSettings(onToggle = () => {}, onRestart = () => {}) {
   const gain = Object.fromEntries(STEMS.map((s) => [s.id, 1]));
 
   const btn = document.createElement("button");
@@ -41,7 +42,9 @@ export function createSettings(onToggle = () => {}) {
         `<span class="h">${s.hint}</span></div>`
     ).join("") +
     '<div class="foot"><span>cisza + brak animacji</span>' +
-    '<button type="button" id="panel-all">wszystko</button></div>';
+    '<button type="button" id="panel-all">wszystko</button></div>' +
+    '<div class="foot"><span>odtwarzanie</span>' +
+    '<button type="button" id="panel-restart" title="zagraj utwór od początku">od początku</button></div>';
 
   document.body.append(btn, panel);
 
@@ -76,6 +79,10 @@ export function createSettings(onToggle = () => {}) {
   btn.addEventListener("click", () => togglePanel());
   panel.querySelector("#panel-all").addEventListener("click", () => {
     for (const s of STEMS) setStem(s.id, true);
+  });
+  panel.querySelector("#panel-restart").addEventListener("click", () => {
+    onRestart();
+    togglePanel(false);
   });
   window.addEventListener("keydown", (e) => {
     if (e.repeat) return;

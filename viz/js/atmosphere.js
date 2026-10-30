@@ -34,7 +34,7 @@ void main() {
 `;
 
 // ---------- gwiazdy ----------
-// Statyczne drobiny na sferze o promieniu 430, wyłącznie nad panoramą gór
+// Statyczne drobiny na sferze o promieniu 760, wyłącznie nad panoramą gór
 // (elewacja 9..88°). Pozycje się nie ruszają — jedyny ruch to bardzo wolne
 // migotanie ±9%, które czyta się jako "żywa" gwiazda, nie jako dryf pyłu.
 const STAR_VERT = /* glsl */ `
@@ -102,7 +102,7 @@ export class Atmosphere {
     // nad falami i czytało się jako kasza/brud na obrazie, a nie jako powietrze.
     // Zostają tylko 8 hero bokeh (od uderzeń bębnów) i gwiazdy na niebie.
 
-    // gwiazdy — statyczne drobiny na sferze R=430, nad panoramą. Azimut zawężony
+    // gwiazdy — statyczne drobiny na sferze R=760 (ZA górami), nad panoramą. Azimut zawężony
     // do sektora, który kamera faktycznie widzi (±65° od osi patrzenia), inaczej
     // 90% gwiazd ląduje za plecami i niebo zostaje puste.
     const NS = 320;
@@ -112,7 +112,10 @@ export class Atmosphere {
     const sPhase = new Float32Array(NS);
     const sRate = new Float32Array(NS);
     const sTint = new Float32Array(NS);
-    const R = 430;
+    // R = 760: dalekie pasmo gór sięga ~600 m od kamery (kurtyna z 30% zapasu),
+    // więc przy R = 430 gwiazdy na bocznych krawędziach kadru były BLIŻEJ niż
+    // góry i rysowały się na ich tle. 760 m > 600 m + zapas, a wciąż < far (900).
+    const R = 760;
     const A0 = -Math.PI / 2;                      // oś patrzenia = -Z
     const ASPAN = THREE.MathUtils.degToRad(130);
     for (let i = 0; i < NS; i++) {

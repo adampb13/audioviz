@@ -155,6 +155,13 @@ export class Ground {
     this.waveI = (this.waveI + 1) % MAX_WAVES;
   }
 
+  // po przewinięciu utworu: wygaszone wszystkie fale (stare t0 i tak by zniknęły,
+  // ale po restarcie czasu t0 > t dawałoby falę „z przyszłości")
+  reset() {
+    for (const w of this.waves) w.set(0, 0, 7, 0);
+    this.waveI = 0;
+  }
+
   update(t, energy, beatPulse) {
     this.uniforms.uTime.value = Number.isFinite(t) ? t : 0;
     this.uniforms.uCoreGlow.value = energy;

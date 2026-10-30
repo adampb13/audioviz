@@ -61,6 +61,7 @@
   #panel .foot button { all: unset; cursor: pointer; font-size: 9px; letter-spacing: .12em;
     color: rgba(217,152,74,.6); text-transform: uppercase; }
   #panel .foot button:hover { color: #ffcf8a; }
+  #panel .foot + .foot { margin-top: 2px; padding-top: 0; border-top: 0; }
 </style>
 <script type="importmap">
 {
@@ -74,7 +75,7 @@
 <body>
 <div id="overlay">
   <button id="start">Start</button>
-  <small>Spacja: pauza · H: ukryj panel · utwór: ?track=nazwa</small>
+  <small>Spacja: pauza · H: info · S: ścieżki · utwór: ?track=nazwa</small>
   <div id="err"></div>
 </div>
 <div id="hud"></div>
