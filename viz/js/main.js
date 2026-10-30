@@ -137,16 +137,10 @@ if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
-// Sfera: „inne” steruje jasnością, mocny „bas” wypuszcza cząstki.
-const otherOnsets = new EventCursor(track.otherOnsetT, track.otherOnsetS);
-// Akcenty melodyczne „inne” — to one dają rozbłysk (patrz detect_accents.py).
-const accents = new EventCursor(track.accentT, track.accentS);
 const bassBeats = new EventCursor(track.bassBeatT, track.bassBeatS);
-let lastOther = -1, lastBass = -1, lastBurst = -10;
+let lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
-  otherOnsets.reset(t);
-  accents.reset(t);
   bassBeats.reset(t);
   lastBurst = t - 2; // po przewinięciu nie strzelamy fajerwerkiem od razu
 }
@@ -156,7 +150,7 @@ const S = {
   vRms: 0, vProb: 0, vMidi: 60, vCent: 0,
   bRms: 0, bCent: 0,
   dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120,
-  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, otherFlash: 0, bassHits: 0, bursts: 0,
+  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
@@ -302,21 +296,6 @@ function frame() {
 
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
-  // „inne” -> jasność na KAŻDYM onsiecie tej ścieżki (klawisze, nagłe dźwięki).
-  // Próg tylko na cyfrową ciszę; 40 ms dedupe (detektor: rozdzielczość 16.7 ms).
-  // Akcenty „inne”: 461 pików na utwór, ale tylko część to ZNACZĄCE uderzenia
-  // melodii. Trzy progi: <0.45 cisza (ozdobniki), 0.45-0.75 ciepły akcent,
-  // >=0.75 pełny rozbłysk do bieli. Refractory 0.20 s, bo akcenty i tak są
-  // rzadkie (~0.9/s), a przy gęstym motywie nie chcemy stroboskopu.
-  accents.poll(t, (_t0, s) => {
-    S.accentsFired = (S.accentsFired || 0) + 1;
-    if (!g.inne) return;
-    if (s < 0.35) return;
-    if (t - lastOther < 0.20) return;
-    lastOther = t;
-    S.otherFlash++;
-    core.otherHit(s, clamp(S.oRms / (track.oRmsP95 || 1), 0, 1));
-  });
   // KAŻDY bit „bas” -> mocna zmiana STRUKTURY kuli (żebro biegnące po powierzchni).
   // Bez progu siły; pomijamy tylko bity, gdy bas w ogóle nie gra.
   bassBeats.poll(t, () => {
@@ -338,9 +317,8 @@ function frame() {
     core.loudHit(clamp((jump - 0.15) / 0.55, 0.4, 1));
   }
 
-  // głośność „inne" znormalizowana p95 — jedyny sygnał koloru/jasności sfery
-  const oSlowN = clamp(S.oSlow / (track.oRmsP95 || 1), 0, 1);
-  core.update(t, dt, S.energy, S.beatPulse, S.bRms, oSlowN, S.oCent);
+  // kolor sfery jest stały — żadna ścieżka go nie zmienia
+  core.update(t, dt, S.energy, S.beatPulse, S.bRms);
   ribbon.update(t, track, dt, g.wokal);
   atmosphere.update(t, dt, S.energy, S.tempo);
   // pełny exposure tylko w piku (audit v2 P1)
@@ -374,7 +352,7 @@ function frame() {
       `t ${t.toFixed(2)}  sec ${sec + 1}/${track.sections.length}  ` +
       `vR ${S.vRms.toFixed(2)} vP ${S.vProb.toFixed(2)} midi ${S.vMidi.toFixed(1)}  ` +
       `bR ${S.bRms.toFixed(2)} en ${S.energy.toFixed(2)} bp ${S.beatPulse.toFixed(2)}  ` +
-      `sz ${core.scale.toFixed(2)} w ${core.white.toFixed(2)} st ${core.uniforms.uStruct.value.toFixed(2)}  ` +
+      `sz ${core.scale.toFixed(2)} st ${core.uniforms.uStruct.value.toFixed(2)}  ` +
       `waves ${S.wavesFired}  blysk ${S.bursts}  p95 ${fpsP95}fps  dc ${calls}`;
     window.__viz = {
       t, section: sec, sections: track.sections.length,
@@ -382,10 +360,10 @@ function frame() {
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
-      otherHits: S.otherHits, otherFlash: S.otherFlash, accentsFired: S.accentsFired || 0,
+      otherHits: S.otherHits,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
-      core: { flash: core.flash, white: core.white, beat: core.beat, scale: core.scale,
+      core: { beat: core.beat, scale: core.scale,
         uStruct: core.uniforms.uStruct.value, uWobble: core.uniforms.uWobble.value },
       ctxLost, track: TRACK,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),

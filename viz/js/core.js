@@ -79,16 +79,15 @@ void main() {
 const FRAG = /* glsl */ `
 precision highp float;
 ${NOISE_GLSL}
-uniform float uEnergy; // poziom żaru 0..1 — z „inne" (głośność + błysk)
-uniform float uGain;   // jasność — z „inne"
-uniform float uHot;    // 0..1 z centroidu „inne" — przesuwa bursztyn ku kremowi
+// Kolor kuli jest STAŁY — ścieżka „inne" nie ma z nim nic wspólnego.
+const float ENERGY = 0.45;  // poziom żaru: ciemny bursztyn -> jasne złoto
+const float GAIN = 0.50;    // jasność bazowa
+const float HOT = 0.50;     // temperatura górnego końca (bursztyn <-> krem)
 uniform float uTime;
 uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
 uniform float uBeat;    // bit basu — wzbiera falowanie jasności
 varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
 varying vec3 vObj;
-uniform float uFlash;  // 0..1 — kolorystyczny akcent na KAŻDYM onsiecie „inne"
-uniform float uWhite;  // 0..1 — mocny dźwięk: kula rozbłyskuje do bieli
 varying vec3 vN;
 varying vec3 vWorld;
 void main() {
@@ -99,21 +98,9 @@ void main() {
   vec3 deep = vec3(0.34, 0.10, 0.0);                                  // ciemny bursztyn
   // górny koniec zostaje POMARAŃCZOWY, nie kremowy: przy bloom+ACES krem
   // odbarwia się do bieli i wtedy akcent koloru na bit przestaje być widoczny
-  vec3 hot = mix(vec3(1.0, 0.52, 0.16), vec3(1.0, 0.66, 0.32), uHot * 0.45);
-  vec3 base = mix(deep, hot, clamp(uEnergy, 0.0, 1.0));
+  vec3 hot = mix(vec3(1.0, 0.52, 0.16), vec3(1.0, 0.66, 0.32), HOT * 0.45);
+  vec3 base = mix(deep, hot, ENERGY);
 
-  // EWIDENTNE uderzenie „inne" = lekkie ocieplenie barwy (bursztyn -> miód),
-  // NIE czerwony błysk: mocne przesunięcie koloru na każdym uderzeniu czytało
-  // się jako chaos. Akcent ma być subtelny i krótki.
-  vec3 beatTint = vec3(1.0, 0.60, 0.34);
-  base = mix(base, beatTint, clamp(uFlash * 0.14, 0.0, 1.0));
-
-  // MOCNE uderzenie „inne" (klawisze): kolor idzie w stronę ciepłej bieli,
-  // ale tylko do połowy i przez jasność — ma być GLOW, nie błysk lampy.
-  base = mix(base, vec3(1.0, 0.92, 0.80), clamp(uWhite * 0.45, 0.0, 1.0));
-
-  // jasność zmienia TYLKO głośność „inne" (uGain) i biel (uWhite); akcent barwy
-  // (uFlash) nie podnosi jasności — inaczej kolor natychmiast przepalał się do bieli
   // STRUKTURA BASU = falowanie powłoki: modulujemy JASNOŚĆ (nie geometrię),
   // więc kula zawsze zostaje kulą — bez wklęsnięć i płaskich ścian.
   // Jasność idzie ZA tym samym polem, które wypycha wierzchołki (vDisp), więc
@@ -121,10 +108,9 @@ void main() {
   // a nie jak plamy na kuli.
   float relief = 1.0 + vDisp * (0.28 * uStruct + 0.34 * uBeat);
   relief = clamp(relief, 0.65, 1.40);
-  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.02 + uWhite * 0.42) * relief;
-  // miękki sufit: spokojny żar trzyma się PONIŻEJ odbarwienia (ACES nie myje go do
-  // bieli), a rozjaśnienie otwiera go tylko do 1.22 — poświata bez przepalenia
-  float cap = 0.72 + 0.26 * clamp(uWhite, 0.0, 1.0);
+  vec3 col = base * (0.72 + fres * 0.85) * GAIN * relief;
+  // miękki sufit: żar trzyma się PONIŻEJ odbarwienia — ACES nie myje go do bieli
+  const float cap = 0.78;
   col = cap * tanh(col / cap);
   gl_FragColor = vec4(col, 1.0);
 }
@@ -147,11 +133,6 @@ function haloTexture() {
   return tex;
 }
 
-const ss = (a, b, x) => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
-
 const R_BASE = 0.9;     // promień siatki sfery
 const GROW = 0.85;      // ile rośnie kula przy pełnej energii (1 -> 1.85)
 const BEAT_GROW = 0.10; // dodatkowy puls od bębnów
@@ -166,11 +147,6 @@ export class CoreSphere {
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
       uBeat: { value: 0 },
-      uEnergy: { value: 0.35 },
-      uGain: { value: 0.55 },
-      uHot: { value: 0.5 },
-      uFlash: { value: 0 },
-      uWhite: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
@@ -199,32 +175,13 @@ export class CoreSphere {
     this.mesh.add(this.light);
 
     // obwiednie (czysto JS)
-    this.flash = 0; // akcent kolorystyczny od pojedynczego uderzenia „inne"
-    this.white = 0; // rozbłysk do bieli od mocnego dźwięku
-    this.glow = 0;  // WYGŁADZONY żar: głośność „inne" + błysk (0..1)
-    this.hot = 0.5; // wygładzona temperatura barwy (centroid „inne")
     this.bass = 0;  // obecność basu (struktura)
     this.beat = 0;  // impuls struktury na bit basu
     this.scale = 1; // wygładzony rozmiar (energia + puls bębnów)
   }
 
-  // AKCENT melodyczny „inne" (detect_accents.py). `s` = siła akcentu (0..1),
-  // `strong` = czy to akcent >= 0.75 (ewidentne, wyeksponowane uderzenie).
-  // Ciepły akcent daje samą barwę; dopiero mocny akcent rozjaśnia ku bieli.
-  otherHit(strength, loudness = 1) {
-    const s = Math.min(1, Math.max(0, strength));
-    // Delikatnie: akcent to podniesienie głośności, nie uderzenie w bęben.
-    this.flash = Math.max(this.flash, 0.18 + 0.32 * s);
-    // Moc silnie nieliniowa: cicha nuta ledwo muska kulę (s=0.45 → 0.10),
-    // mocne podniesienie świeci wyraźnie (s=1 → 0.50). Dzięki temu gęste nuty
-    // melodii są widoczne, ale nie robią stroboskopu.
-    const g = Math.pow(s, 1.4);
-    const w = Math.min(0.55, (0.06 + 0.46 * g) * (0.60 + 0.40 * ss(0.12, 0.65, loudness)));
-    this.white = Math.max(this.white, w);
-  }
-
   // DROP: bas uderza mocniej — struktura dostaje grubsze żebro. Koloru NIE
-  // dotykamy: barwa i biel należą wyłącznie do „inne".
+  // dotykamy: kolor kuli jest stały i nie zależy od żadnej ścieżki.
   loudHit(v = 1) {
     const s = Math.min(1, Math.max(0, v));
     this.beat = Math.max(this.beat, 0.85 * s);
@@ -238,23 +195,13 @@ export class CoreSphere {
   }
 
   // energySmooth: energia całości (rozmiar); beatPulse: puls bębnów (rozmiar);
-  // bassEnv: obecność basu (struktura); otherLoud/otherCent: „inne" (kolor, jasność)
-  update(t, dt, energySmooth, beatPulse, bassEnv, otherLoud, otherCent) {
+  // bassEnv: obecność basu (struktura). Kolor kuli nie zależy od żadnej ścieżki.
+  update(t, dt, energySmooth, beatPulse, bassEnv) {
     // STRUKTURA — tylko bas. Szybki atak, szybsze puszczenie: zmiany mają być
     // wyraźne w rytm basu, ale wciąż bez skoków.
     const kb = bassEnv > this.bass ? 9.0 : 2.4;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
-    this.flash *= Math.exp(-dt * 6.5); // krótki akcent: każdy klawisz osobno
-    this.white *= Math.exp(-dt * 5.2); // biel ~0.19 s — krótki, miękki puls
     this.beat *= Math.exp(-dt * 7.0);  // żebro basu znika w ~0.2 s
-
-    // JASNOŚĆ/KOLOR — wyłącznie „inne". Głośność ciągła + akcent onsetu,
-    // wygładzone obwiednią, żeby kolor płynął, a nie przeskakiwał.
-    // Jasność: spokojna obwiednia głośności „inne” (bez skoków na każdą nutę) +
-    // niewielki dodatek od pojedynczego, ewidentnego uderzenia.
-    const target = Math.min(1, ss(0.10, 0.86, otherLoud) * 0.90 + this.flash * 0.12);
-    const kg = target > this.glow ? 2.2 : 1.2;
-    this.glow += (target - this.glow) * (1 - Math.exp(-dt * kg));
 
     // ROZMIAR — sumaryczna energia i głośność muzyki. Krzywa potęgowa, żeby
     // spokojne fragmenty były wyraźnie mniejsze, a najmocniejsze momenty rosły
@@ -271,16 +218,6 @@ export class CoreSphere {
     const bassG = q * q * (3 - 2 * q);
     this.uniforms.uStruct.value = bassG;
     this.uniforms.uBeat.value = this.beat;
-    // temperatura barwy też płynie wolno — centroid skacze z każdą nutą
-    this.hot += (otherCent - this.hot) * (1 - Math.exp(-dt * 1.6));
-    this.uniforms.uHot.value = this.hot;
-    // szeroki, ale niezbyt przepalony zakres: ciemny bursztyn -> jasne złoto
-    this.uniforms.uEnergy.value = 0.05 + this.glow * 0.78;
-    // Jasność trzymana PONIŻEJ progu blooma: kula ma czytać się jako bursztyn
-    // z widocznymi fałdami; do bieli strzela tylko uWhite (mocny dźwięk).
-    this.uniforms.uGain.value = 0.26 + this.glow * 0.46;
-    this.uniforms.uFlash.value = this.flash;
-    this.uniforms.uWhite.value = this.white;
     // Amplituda przemieszczenia: spokój 1.8% promienia, pełne fałdy basu ~5.3%.
     // Żebro bitu (uBeat) siedzi w polu funkcji, więc dokłada się samo — razem
     // najgorszy przypadek ~20% promienia: mocno widać, kula się nie rozlatuje.
@@ -289,17 +226,9 @@ export class CoreSphere {
     this.mesh.scale.setScalar(this.scale);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,
     // nie zalewać sceny (audit: „nie oświetlać jakoś bardzo sceny do góry")
-    this.light.intensity = 1.2 + this.glow * 2.8 + this.white * 1.1;
+    this.light.intensity = 2.4;
     this.light.distance = 15 + this.scale * 4;
-    this.haloMat.opacity = 0.06 + this.glow * 0.07 + this.white * 0.05;
-    // halo MUSI zmieniać barwę razem z kulą — inaczej additive krem zjada akcent
-    // koloru na bicie (kula wygląda na białą mimo czerwonego tintu)
-    const fr = this.flash;
-    const wh = this.white;
-    this.haloMat.color.setRGB(
-      1.0,
-      ((0.81 * (1 - fr) + 0.34 * fr) * (1 - wh * 0.85) + wh * 0.85),
-      ((0.54 * (1 - fr) + 0.16 * fr) * (1 - wh * 0.85) + wh * 0.85)
-    );
+    this.haloMat.opacity = 0.10;
+    this.haloMat.color.setRGB(1.0, 0.72, 0.44); // stała ciepła poświata
   }
 }
