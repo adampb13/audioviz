@@ -106,7 +106,7 @@ void main() {
   // NIE czerwony błysk: mocne przesunięcie koloru na każdym uderzeniu czytało
   // się jako chaos. Akcent ma być subtelny i krótki.
   vec3 beatTint = vec3(1.0, 0.60, 0.34);
-  base = mix(base, beatTint, clamp(uFlash * 0.30, 0.0, 1.0));
+  base = mix(base, beatTint, clamp(uFlash * 0.16, 0.0, 1.0));
 
   // MOCNE uderzenie „inne" (klawisze): kolor idzie w stronę ciepłej bieli,
   // ale tylko do połowy i przez jasność — ma być GLOW, nie błysk lampy.
@@ -121,7 +121,7 @@ void main() {
   // a nie jak plamy na kuli.
   float relief = 1.0 + vDisp * (0.28 * uStruct + 0.34 * uBeat);
   relief = clamp(relief, 0.65, 1.40);
-  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.03 + uWhite * 0.58) * relief;
+  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.02 + uWhite * 0.34) * relief;
   // miękki sufit: spokojny żar trzyma się PONIŻEJ odbarwienia (ACES nie myje go do
   // bieli), a rozjaśnienie otwiera go tylko do 1.22 — poświata bez przepalenia
   float cap = 0.72 + 0.26 * clamp(uWhite, 0.0, 1.0);
@@ -213,12 +213,12 @@ export class CoreSphere {
   // Ciepły akcent daje samą barwę; dopiero mocny akcent rozjaśnia ku bieli.
   otherHit(strength, loudness = 1) {
     const s = Math.min(1, Math.max(0, strength));
-    this.flash = Math.max(this.flash, 0.40 + 0.60 * s);
-    // Rozjaśnienie dostaje KAŻDY akcent z listy (lista jest już przefiltrowana do
-    // 0.33/s — non-max suppression w detect_accents.py), a jego moc skaluje się
-    // salience'em: najważniejsze uderzenie świeci najmocniej. Głośność SAMEJ
-    // ścieżki „inne" (nie miks — inaczej bas decydowałby o bieli).
-    const w = Math.min(0.85, (0.22 + 0.78 * s) * (0.50 + 0.50 * ss(0.10, 0.62, loudness)));
+    // Delikatnie: akcent to podniesienie głośności, nie uderzenie w bęben.
+    this.flash = Math.max(this.flash, 0.25 + 0.45 * s);
+    // Rozjaśnienie dostaje KAŻDY akcent z listy (lista już przefiltrowana do
+    // ~0.4/s — non-max suppression w detect_accents.py), a jego moc skaluje się
+    // siłą ataku. Sufit 0.55: poświata, nie biała lampa.
+    const w = Math.min(0.55, (0.10 + 0.42 * s) * (0.55 + 0.45 * ss(0.12, 0.65, loudness)));
     this.white = Math.max(this.white, w);
   }
 
@@ -244,7 +244,7 @@ export class CoreSphere {
     const kb = bassEnv > this.bass ? 9.0 : 2.4;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
     this.flash *= Math.exp(-dt * 6.5); // krótki akcent: każdy klawisz osobno
-    this.white *= Math.exp(-dt * 5.0); // biel ~0.2 s — widoczna, ale nie lampa
+    this.white *= Math.exp(-dt * 3.6); // biel ~0.28 s — łagodne zejście
     this.beat *= Math.exp(-dt * 7.0);  // żebro basu znika w ~0.2 s
 
     // JASNOŚĆ/KOLOR — wyłącznie „inne". Głośność ciągła + akcent onsetu,

@@ -311,7 +311,7 @@ function frame() {
   accents.poll(t, (_t0, s) => {
     S.accentsFired = (S.accentsFired || 0) + 1;
     if (!g.inne) return;
-    if (s < 0.45) return;
+    if (s < 0.30) return;
     if (t - lastOther < 0.20) return;
     lastOther = t;
     S.otherFlash++;
