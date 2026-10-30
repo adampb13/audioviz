@@ -303,27 +303,27 @@ function frame() {
     if (!g.inne) return;               // wyciszone „inne” = sfera bez błysków
     if (s < 0.02 || t - lastOther < 0.04) return;
     lastOther = t;
-    core.otherHit(s);
+    core.otherHit(s, S.energy);
   });
-  // KAŻDY bit „bas” -> cząstki z kuli (bez progu siły; pomijamy tylko bity,
-  // gdy bas w ogóle nie gra)
+  // KAŻDY bit „bas” -> mocna zmiana STRUKTURY kuli (żebro biegnące po powierzchni).
+  // Bez progu siły; pomijamy tylko bity, gdy bas w ogóle nie gra.
   bassBeats.poll(t, () => {
     S.bassHits++;
-    if (!g.bas) return;                // wyciszony „bas” = brak cząstek
+    if (!g.bas) return;                // wyciszony „bas” = kula gładka, bez żebra
     if (S.bRms < 0.12) return;
-    core.bassHit(clamp(S.bRms, 0.2, 1));
+    core.bassPulse(clamp(S.bRms * 1.5, 0.2, 1), S.energy);
   });
   // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).
   // Warunki: skok > 0.20, teraz naprawdę głośno (>0.55), tło jeszcze ciche
   // (<0.42), edge + 1.4 s cooldown (obwiednia dogania skok przez ~0.5 s).
   const jump = energyT - S.dropEnv;
-  // fajerwerk należy do „bas” (jak cząstki na bit) — przy wyciszonym basie nie strzela
+  // rozbłysk należy do „bas” (jak żebro na bit) — przy wyciszonym basie nie strzela
   if (g.bas && jump > 0.20 && energyT > 0.55 && S.dropEnv < 0.42 && t - lastBurst > 1.4) {
     lastBurst = t;
     S.bursts++;
     S.dropLog.push({ t: +t.toFixed(2), jump: +jump.toFixed(2), e: +energyT.toFixed(2), env: +S.dropEnv.toFixed(2) });
     if (S.dropLog.length > 12) S.dropLog.shift();
-    core.dropBurst(clamp((jump - 0.15) / 0.55, 0.2, 1));
+    core.loudHit(clamp((jump - 0.15) / 0.55, 0.4, 1));
   }
 
   // głośność „inne" znormalizowana p95 — jedyny sygnał koloru/jasności sfery
@@ -362,7 +362,8 @@ function frame() {
       `t ${t.toFixed(2)}  sec ${sec + 1}/${track.sections.length}  ` +
       `vR ${S.vRms.toFixed(2)} vP ${S.vProb.toFixed(2)} midi ${S.vMidi.toFixed(1)}  ` +
       `bR ${S.bRms.toFixed(2)} en ${S.energy.toFixed(2)} bp ${S.beatPulse.toFixed(2)}  ` +
-      `waves ${S.wavesFired}  bursts ${S.bursts}  p95 ${fpsP95}fps  dc ${calls}`;
+      `sz ${core.scale.toFixed(2)} w ${core.white.toFixed(2)} st ${core.uniforms.uStruct.value.toFixed(2)}  ` +
+      `waves ${S.wavesFired}  blysk ${S.bursts}  p95 ${fpsP95}fps  dc ${calls}`;
     window.__viz = {
       t, section: sec, sections: track.sections.length,
       vRms: S.vRms, vProb: S.vProb, vMidi: S.vMidi, vCent: S.vCent,
@@ -371,6 +372,8 @@ function frame() {
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
+      core: { flash: core.flash, white: core.white, beat: core.beat, scale: core.scale,
+        uStruct: core.uniforms.uStruct.value, uWobble: core.uniforms.uWobble.value },
       ctxLost, track: TRACK,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
     };

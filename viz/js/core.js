@@ -1,38 +1,62 @@
-// System 2: SFERA-SERCE — mały, ciepły żar wpół zagłębiony w ziemi (audit P0-1).
+// System 2: SFERA-SERCE — ciepły żar wpół zagłębiony w ziemi.
 //
-// Trzy niezależne wejścia, każde z innej ścieżki:
-//   • „inne" -> NAŚWIETLENIE. Błysk na KAŻDYM onsiecie tej ścieżki (klawisze,
-//     nagłe dźwięki); między nimi sfera jest przygaszonym bursztynowym żarem.
-//     Nic innego nie rusza jasności (ani energia całości, ani bas, ani bębny).
-//   • „bas"  -> STRUKTURA, ale WYŁĄCZNIE przy mocno obecnym basie. Poniżej
-//     ~0.55 basu kula jest gładka; powyżej 0.90 marszczy się na maksa.
-//   • KAŻDY bit „bas" -> kilka cząstek z powierzchni kuli.
-//   • DROP (cisza -> głośna muzyka) -> FAJERWERK: salwa 60–90 większych
-//     cząstek naraz, w kulistych wybuchach, z większą prędkością i dłuższym życiem.
-//   • bębny -> puls rozmiaru (jak dotąd), wokal -> drobne drżenie powierzchni.
+// Cztery niezależne wejścia, każde z innej ścieżki:
+//   • „inne" -> KOLOR i JASNOŚĆ. Każdy onset przesuwa barwę (bursztyn -> szampańskie
+//     złoto) i podbija jasność; między onsetami kula jest przygaszonym żarem.
+//     Mocne, głośne dźwięki rozbłyskują kulę DO BIAŁY na ~0.15 s (uWhite).
+//   • „bas"  -> STRUKTURA. Poniżej ~0.55 basu kula jest gładka, powyżej 0.90 marszczy
+//     się na maksa; KAŻDY bit basu dodatkowo uderza w nią żebrem (uBeat) — mocna,
+//     czytelna zmiana faktury na każdym bicie.
+//   • energia + głośność całości -> ROZMIAR. Najmocniejsze momenty rosną o ~85%.
+//   • bębny -> puls rozmiaru, wokal -> drobne drżenie powierzchni.
 //
-// Nigdy czysta biel: bursztyn -> krem; pełny exposure tylko na „inne".
+// Bez cząstek: kula świeci sobą (usunięte na życzenie — „inne" jest jedynym
+// źródłem koloru, a energia jedynym źródłem rozmiaru).
 import * as THREE from "three";
 import { NOISE_GLSL, PAL } from "./glsl.js";
 
-const VERT = /* glsl */ `
+// Przemieszczenie powierzchni wzdłuż normalnej: fałdy basu + żebro na uderzenie.
+// Zwraca wartość w jednostkach „wobbli", skalowaną potem przez uWobble.
+const DISP_GLSL = /* glsl */ `
 uniform float uTime;
-uniform float uWobble;
 uniform float uStruct;   // 0..1 — obecność basu: gęstszy, głębszy szum
+uniform float uBeat;     // 0..1 — impuls na KAŻDY bit basu: żebro po kuli
+float dispAt(vec3 n) {
+  float nf = 2.2 + uStruct * 2.6;
+  float d = snoise(n * nf + vec3(0.0, uTime * 0.55, 0.0)) * 0.70;
+  d += snoise(n * 6.0 - vec3(uTime * 0.35)) * 0.30;
+  // drugi, wolniejszy przebieg tylko od basu — szerokie pasma, nie drobny szum
+  d += snoise(n * (nf * 1.6) + vec3(uTime * 0.42)) * 0.45 * uStruct;
+  // UDERZENIE BASU: dwa żebra biegnące po kuli w różnych kierunkach
+  d += sin(dot(n, vec3(0.35, 1.0, 0.20)) * 5.5 - uTime * 5.5) * 1.35 * uBeat;
+  d += sin(dot(n, vec3(-0.80, 0.35, 0.60)) * 4.0 + uTime * 3.0) * 0.75 * uBeat;
+  return d;
+}
+`;
+
+const VERT = /* glsl */ `
+uniform float uWobble;   // uTime, uStruct, uBeat deklaruje DISP_GLSL poniżej
 varying vec3 vN;
 varying vec3 vWorld;
 ${NOISE_GLSL}
+${DISP_GLSL}
 void main() {
-  vec3 p = position;
-  // struktura: przy basie szum gęstnieje i rośnie amplituda, więc kula
-  // zmienia fakturę, a nie tylko pulsuje
-  float nf = 2.5 + uStruct * 4.5;
-  float n = snoise(normal * nf + vec3(0.0, uTime * 0.6, 0.0));
-  float n2 = snoise(normal * 6.0 - vec3(uTime * 0.35));
-  p += normal * (n * 0.7 + n2 * 0.3) * uWobble;
-  // drugi, wolniejszy przebieg tylko od basu — czytelne "przestawienie" fałd
-  p += normal * snoise(normal * (nf * 2.2) + vec3(uTime * 0.45)) * 0.22 * uStruct;
-  vN = normalize(normalMatrix * normal);
+  vec3 n = normalize(position);
+  float d0 = dispAt(n);
+  vec3 p = position + n * d0 * uWobble;
+
+  // Normalna z gradientu pola przemieszczenia (różnice skończone po stycznych):
+  // bez tego fałdy widać tylko na sylwetce, a światło ich nie łapie.
+  vec3 up = abs(n.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+  vec3 ta = normalize(cross(n, up));
+  vec3 tb = cross(n, ta);
+  float e = 0.06;
+  float da = dispAt(normalize(n + ta * e));
+  float db = dispAt(normalize(n + tb * e));
+  vec3 grad = ta * ((da - d0) / e) + tb * ((db - d0) / e);
+  vec3 nP = normalize(n - grad * uWobble * 1.25);
+
+  vN = normalize(normalMatrix * nP);
   vec4 wp = modelMatrix * vec4(p, 1.0);
   vWorld = wp.xyz;
   gl_Position = projectionMatrix * viewMatrix * wp;
@@ -41,51 +65,42 @@ void main() {
 
 const FRAG = /* glsl */ `
 precision highp float;
-uniform float uEnergy; // poziom żaru 0..1 — TYLKO z „inne" (błysk), nie z energii utworu
-uniform float uGain;   // jasność — TYLKO z „inne"
+uniform float uEnergy; // poziom żaru 0..1 — z „inne" (głośność + błysk)
+uniform float uGain;   // jasność — z „inne"
 uniform float uHot;    // 0..1 z centroidu „inne" — przesuwa bursztyn ku kremowi
+uniform float uFlash;  // 0..1 — kolorystyczny akcent na KAŻDYM onsiecie „inne"
+uniform float uWhite;  // 0..1 — mocny dźwięk: kula rozbłyskuje do bieli
 varying vec3 vN;
 varying vec3 vWorld;
 void main() {
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vWorld);
   float fres = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 2.0);
-  // nigdy czysta biel: bursztyn #7a3000 -> #ffcf8a (audit v2 P1)
-  vec3 deep = vec3(0.40, 0.115, 0.0);
+
+  vec3 deep = vec3(0.34, 0.10, 0.0);                                  // ciemny bursztyn
   // górny koniec zostaje POMARAŃCZOWY, nie kremowy: przy bloom+ACES krem
-  // odbarwiał się do bieli i kolor przestawał być czytelny
-  vec3 hot = mix(vec3(1.0, 0.60, 0.22), vec3(1.0, 0.74, 0.42), uHot * 0.45);
+  // odbarwia się do bieli i wtedy akcent koloru na bit przestaje być widoczny
+  vec3 hot = mix(vec3(1.0, 0.52, 0.16), vec3(1.0, 0.66, 0.32), uHot * 0.45);
   vec3 base = mix(deep, hot, clamp(uEnergy, 0.0, 1.0));
-  vec3 col = base * (0.7 + fres * 0.8) * uGain;
-  // miękki sufit: po stacku z halo+bloom nigdy nie dobija do czystej bieli
-  col = 1.05 * tanh(col / 1.05);
+
+  // BIT „inne" = przesunięcie BARWY, nie tylko jasności: bursztyn -> szampańskie
+  // złoto (chłodniejsze, jaśniejsze), gaśnie w ~0.15 s po onsiecie
+  // na bit „inne" kula się ZARUMIENIA: głębsza, bardziej nasycona czerwień
+  vec3 beatTint = vec3(1.0, 0.24, 0.08);
+  base = mix(base, beatTint, clamp(uFlash * 0.95, 0.0, 1.0));
+
+  // MOCNY/GŁOŚNY dźwięk: chwilowe rozbłysknięcie do czystej bieli
+  base = mix(base, vec3(1.0), clamp(uWhite, 0.0, 1.0));
+
+  // jasność zmienia TYLKO głośność „inne" (uGain) i biel (uWhite); akcent barwy
+  // (uFlash) nie podnosi jasności — inaczej kolor natychmiast przepalał się do bieli
+  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.05 + uWhite * 0.45);
+  // miękki sufit: spokojny żar nie przepala się, ale biały błysk może dobić do 255
+  // sufit trzyma spokojny żar PONIŻEJ odbarwienia (ACES nie myje go do bieli),
+  // a biały błysk otwiera go do 2.0 — wtedy bloom naprawdę przepala kulę
+  float cap = 0.72 + 1.28 * clamp(uWhite, 0.0, 1.0);
+  col = cap * tanh(col / cap);
   gl_FragColor = vec4(col, 1.0);
-}
-`;
-
-// ---------- cząstki wypuszczane na mocne uderzenie basu ----------
-const P_VERT = /* glsl */ `
-attribute float aAlpha;
-attribute float aSize;
-varying float vAlpha;
-void main() {
-  vAlpha = aAlpha;
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_PointSize = aSize * 760.0 / max(-mv.z, 0.1);
-  gl_Position = projectionMatrix * mv;
-}
-`;
-
-const P_FRAG = /* glsl */ `
-precision highp float;
-uniform vec3 uColor;
-varying float vAlpha;
-void main() {
-  vec2 d = gl_PointCoord - 0.5;
-  float r = length(d);
-  if (r > 0.5) discard;
-  float core = smoothstep(0.5, 0.0, r);
-  gl_FragColor = vec4(uColor * (0.35 + core * 0.85), vAlpha * core * core);
 }
 `;
 
@@ -106,21 +121,30 @@ function haloTexture() {
   return tex;
 }
 
-const R_BASE = 0.9;     // promień siatki sfery (bez zmian)
-const P_MAX = 460;      // pula cząstek — jedno Points, jedno draw call (fajerwerki!)
+const ss = (a, b, x) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+const R_BASE = 0.9;     // promień siatki sfery
+const GROW = 0.85;      // ile rośnie kula przy pełnej energii (1 -> 1.85)
+const BEAT_GROW = 0.10; // dodatkowy puls od bębnów
 
 export class CoreSphere {
   constructor() {
     this.group = new THREE.Group();
 
-    const geo = new THREE.SphereGeometry(R_BASE, 96, 96);
+    const geo = new THREE.SphereGeometry(R_BASE, 144, 144); // gęsta siatka: fałdy gładkie, bez faset
     this.uniforms = {
       uTime: { value: 0 },
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
+      uBeat: { value: 0 },
       uEnergy: { value: 0.35 },
       uGain: { value: 0.55 },
       uHot: { value: 0.5 },
+      uFlash: { value: 0 },
+      uWhite: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
@@ -128,7 +152,7 @@ export class CoreSphere {
       uniforms: this.uniforms,
     });
     this.mesh = new THREE.Mesh(geo, mat);
-    this.mesh.position.set(0, 0.3, 0); // wkopana w ziemię — jak żar (audit v2 P1)
+    this.mesh.position.set(0, 0.3, 0); // wkopana w ziemię — jak żar
     this.group.add(this.mesh);
 
     // miękkie halo zamiast przepalonego dysku
@@ -148,190 +172,101 @@ export class CoreSphere {
     this.light = new THREE.PointLight(PAL.gold, 8, 60, 2);
     this.mesh.add(this.light);
 
-    // --- cząstki (jedna pula, jedno Points) ---
-    this.pPos = new Float32Array(P_MAX * 3);
-    this.pVel = new Float32Array(P_MAX * 3);
-    this.pAge = new Float32Array(P_MAX).fill(1e3); // wiek >= życie = martwa
-    this.pLife = new Float32Array(P_MAX).fill(1);
-    this.pAlpha = new Float32Array(P_MAX);
-    this.pSize = new Float32Array(P_MAX);
-    const pg = new THREE.BufferGeometry();
-    pg.setAttribute("position", new THREE.BufferAttribute(this.pPos, 3));
-    pg.setAttribute("aAlpha", new THREE.BufferAttribute(this.pAlpha, 1));
-    pg.setAttribute("aSize", new THREE.BufferAttribute(this.pSize, 1));
-    // własna kula ograniczająca: pozycje startują w zerze, zanim cokolwiek
-    // zostanie wypuszczone — bez tego Three policzyłoby bbox z samych zer
-    pg.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.3, 0), 10);
-    this.pGeo = pg;
-    this.pMat = new THREE.ShaderMaterial({
-      vertexShader: P_VERT,
-      fragmentShader: P_FRAG,
-      uniforms: { uColor: { value: new THREE.Color(PAL.goldBright) } },
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    this.points = new THREE.Points(pg, this.pMat);
-    this.points.frustumCulled = false;
-    this.points.renderOrder = 6;
-    this.group.add(this.points);
-    this.pNext = 0;
-    this.pDirty = false;
-
     // obwiednie (czysto JS)
-    this.flash = 0;   // błysk od pojedynczego uderzenia „inne"
-    this.glow = 0;    // WYGŁADZONY żar: głośność „inne" + błysk (0..1)
-    this.bass = 0;    // obecność basu (struktura)
+    this.flash = 0; // akcent kolorystyczny od pojedynczego uderzenia „inne"
+    this.white = 0; // rozbłysk do bieli od mocnego dźwięku
+    this.glow = 0;  // WYGŁADZONY żar: głośność „inne" + błysk (0..1)
+    this.bass = 0;  // obecność basu (struktura)
+    this.beat = 0;  // impuls struktury na bit basu
+    this.scale = 1; // wygładzony rozmiar (energia + puls bębnów)
   }
 
-  // KAŻDY onset w „inne" — jedyne źródło jasności sfery. Niski próg, bo ciche
-  // klawisze też mają zaznaczyć się błyskiem; akcenty dostają pełną moc.
-  otherHit(strength) {
+  // KAŻDY onset w „inne" — źródło koloru i jasności. Niski próg, bo ciche
+  // klawisze też mają zmienić barwę; akcenty dostają pełną moc i biel.
+  otherHit(strength, loudness = 1) {
     const s = Math.min(1, Math.max(0, strength));
-    this.flash = Math.max(this.flash, 0.20 + 0.80 * s);
+    this.flash = Math.max(this.flash, 0.30 + 0.70 * s);
+    // Biel dopiero wtedy, gdy jest NAPRAWDĘ głośno (loudness = energia całości)
+    // i transient jest mocny: cichy klawisz w cichym fragmencie nie przepala kuli.
+    const w = Math.min(1, ss(0.52, 0.88, loudness) * (0.45 + 0.75 * s));
+    if (w > 0.06) this.white = Math.max(this.white, w);
   }
 
-  // mocne uderzenie w „bas" — cząstki z powierzchni kuli
-  bassHit(strength) {
+  // MOCNY dźwięk bez udziału „inne" (drop, akcent basu) — krótki rozbłysk do bieli
+  loudHit(v = 1) {
+    const s = Math.min(1, Math.max(0, v));
+    this.white = Math.max(this.white, s);
+    this.flash = Math.max(this.flash, 0.55 * s);
+  }
+
+  // KAŻDY bit „bas" — mocna zmiana struktury (żebro biegnące po kuli)
+  bassPulse(strength, loudness = 1) {
     const s = Math.min(1, Math.max(0.2, strength));
-    const R = R_BASE * this.mesh.scale.x * 0.94; // z aktualnej powierzchni
-    const cy = this.mesh.position.y;
-    const n = Math.round(6 + 7 * s);
-    for (let k = 0; k < n; k++) {
-      const i = this.pNext;
-      this.pNext = (this.pNext + 1) % P_MAX;
-      // punkt na sferze, równomiernie (bez kumulacji na biegunach)
-      const u = Math.random() * 2 - 1;
-      const phi = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.max(0, 1 - u * u));
-      const nx = rr * Math.cos(phi);
-      const ny = u;
-      const nz = rr * Math.sin(phi);
-      this.pPos[i * 3] = nx * R;
-      this.pPos[i * 3 + 1] = cy + ny * R;
-      this.pPos[i * 3 + 2] = nz * R;
-      // wzdłuż normalnej, lekki rozrzut, odrobina w górę
-      const sp = (0.9 + Math.random() * 1.7) * (0.6 + 0.7 * s);
-      this.pVel[i * 3] = nx * sp + (Math.random() - 0.5) * 0.4;
-      this.pVel[i * 3 + 1] = ny * sp + 0.45 + Math.random() * 0.4;
-      this.pVel[i * 3 + 2] = nz * sp + (Math.random() - 0.5) * 0.4;
-      this.pAge[i] = 0;
-      this.pLife[i] = 0.8 + Math.random() * 0.7;
-      this.pSize[i] = 0.42 + Math.random() * 0.42; // 0.42–0.84 — widoczne z 22 m
-    }
-    this.pDirty = true;
+    this.beat = Math.max(this.beat, 0.55 + 0.45 * s);
+    // mocny bit basu w głośnym fragmencie = krótki rozbłysk do bieli
+    const w = Math.min(1, ss(0.56, 0.90, loudness) * (0.35 + 0.80 * s));
+    if (w > 0.06) this.white = Math.max(this.white, w);
   }
 
-  // DROP: fajerwerk. Nagła zmiana cisza -> głośna muzyka. Kilka kulistych
-  // wybuchów naraz: każdy to stożek cząstek wypuszczonych promieniowo z punktu
-  // na powierzchni, z prędkością i życiem większym niż zwykłe uderzenie basu.
-  // intensity 0..1 (skok energii) steruje liczbą, rozmiarem i prędkością.
-  dropBurst(intensity) {
-    const q = Math.min(1, Math.max(0, intensity));
-    const R = R_BASE * this.mesh.scale.x * 0.94;
-    const cy = this.mesh.position.y;
-    const shells = 3 + Math.round(q * 2);              // 3–5 ognisk
-    const per = Math.round((60 + 30 * q) / shells);    // razem ~60–90 cząstek
-    const sizeMul = 1.3 + q * 0.3;                     // 1.3–1.6x większe niż zwykłe
-    for (let sh = 0; sh < shells; sh++) {
-      // ognisko wybuchu: punkt na sferze (równomiernie, bez biegunów)
-      const u = Math.random() * 2 - 1;
-      const phi = Math.random() * Math.PI * 2;
-      const rr = Math.sqrt(Math.max(0, 1 - u * u));
-      const cx = rr * Math.cos(phi), cyy = u, cz = rr * Math.sin(phi);
-      // baza ortonormalna wokół normalnej ogniska -> stożek wokół promienia
-      const tx = Math.abs(cyy) < 0.9 ? 0 : 1, ty = Math.abs(cyy) < 0.9 ? 1 : 0;
-      let ax = ty * cz - 0 * cyy, ay = 0 * cx - tx * cz, az = tx * cyy - ty * cx;
-      let al = Math.hypot(ax, ay, az) || 1;
-      ax /= al; ay /= al; az /= al;
-      const bx = cyy * az - cz * ay, by = cz * ax - cx * az, bz = cx * ay - cyy * ax;
-      const cone = 0.50 + q * 0.30;                    // rozpiętość stożka (rad)
-      for (let k = 0; k < per; k++) {
-        const i = this.pNext;
-        this.pNext = (this.pNext + 1) % P_MAX;
-        const th = Math.random() * Math.PI * 2;
-        const rr2 = Math.sqrt(Math.random()) * cone;
-        const dx = cx + (ax * Math.cos(th) + bx * Math.sin(th)) * rr2;
-        const dy = cyy + (ay * Math.cos(th) + by * Math.sin(th)) * rr2;
-        const dz = cz + (az * Math.cos(th) + bz * Math.sin(th)) * rr2;
-        const dl = Math.hypot(dx, dy, dz) || 1;
-        const nx = dx / dl, ny = dy / dl, nz = dz / dl;
-        this.pPos[i * 3] = nx * R;
-        this.pPos[i * 3 + 1] = cy + ny * R;
-        this.pPos[i * 3 + 2] = nz * R;
-        // prędkość: promieniowo, mocniej niż zwykły hit, z rozrzutem i wzniesieniem
-        const sp = (4.0 + Math.random() * 2.8) * (0.85 + 0.45 * q);
-        this.pVel[i * 3] = nx * sp + (Math.random() - 0.5) * 1.1;
-        this.pVel[i * 3 + 1] = ny * sp + 0.9 + Math.random() * 0.9;
-        this.pVel[i * 3 + 2] = nz * sp + (Math.random() - 0.5) * 1.1;
-        this.pAge[i] = 0;
-        this.pLife[i] = 1.2 + Math.random() * 0.9;      // 1.2–2.1 s — dłużej niż zwykłe
-        this.pSize[i] = (0.45 + Math.random() * 0.55) * sizeMul;
-      }
-    }
-    this.pDirty = true;
-  }
-
-  // energySmooth: wolna energia całości — steruje TYLKO rozmiarem kuli;
-  // beatPulse: puls rozmiaru od bębnów; bassEnv: obecność basu (struktura);
-  // otherLoud: głośność „inne" (kolor i jasność); otherCent: barwa „inne"
+  // energySmooth: energia całości (rozmiar); beatPulse: puls bębnów (rozmiar);
+  // bassEnv: obecność basu (struktura); otherLoud/otherCent: „inne" (kolor, jasność)
   update(t, dt, energySmooth, beatPulse, bassEnv, otherLoud, otherCent) {
     // STRUKTURA — tylko bas. Szybki atak, szybsze puszczenie: zmiany mają być
     // wyraźne w rytm basu, ale wciąż bez skoków.
     const kb = bassEnv > this.bass ? 9.0 : 2.4;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
-    this.flash *= Math.exp(-dt * 7.0); // krótki błysk: każdy klawisz osobno
+    this.flash *= Math.exp(-dt * 6.5); // krótki akcent: każdy klawisz osobno
+    this.white *= Math.exp(-dt * 7.5); // biel tylko na chwilę
+    this.beat *= Math.exp(-dt * 7.0);  // żebro basu znika w ~0.2 s
+
     // JASNOŚĆ/KOLOR — wyłącznie „inne". Głośność ciągła + akcent onsetu,
     // wygładzone obwiednią, żeby kolor płynął, a nie przeskakiwał.
-    const target = Math.min(1, otherLoud * 0.95 + this.flash * 0.55);
+    const target = Math.min(1, otherLoud * 0.95 + this.flash * 0.60);
     const kg = target > this.glow ? 7.0 : 3.0;
     this.glow += (target - this.glow) * (1 - Math.exp(-dt * kg));
+
+    // ROZMIAR — sumaryczna energia i głośność muzyki. Krzywa potęgowa, żeby
+    // spokojne fragmenty były wyraźnie mniejsze, a najmocniejsze momenty rosły
+    // o ~85% (1.00 -> 1.85). Puls bębnów dokłada 0.10 na uderzenie.
+    const en = Math.min(1, Math.max(0, energySmooth));
+    const scT = 1.0 + GROW * Math.pow(en, 1.15) + beatPulse * BEAT_GROW;
+    this.scale += (scT - this.scale) * (1 - Math.exp(-dt * 6.0)); // bez skoków
 
     this.uniforms.uTime.value = t;
     // struktura TYLKO przy MOCNO obecnym basie: poniżej 0.55 kula jest
     // gładka, powyżej 0.90 marszczy się na maksa (smoothstep = bez skoku)
-    const st0 = 0.55, st1 = 0.90;
+    const st0 = 0.50, st1 = 0.85;
     const q = Math.min(1, Math.max(0, (this.bass - st0) / (st1 - st0)));
     const bassG = q * q * (3 - 2 * q);
     this.uniforms.uStruct.value = bassG;
+    this.uniforms.uBeat.value = this.beat;
     this.uniforms.uHot.value = otherCent;
-    // szeroki zakres: cisza w „inne" = ciemny bursztyn, głośno = krem
-    // szeroki, ale NIGDY przepalony zakres: ciemny bursztyn -> jasny krem
-    this.uniforms.uEnergy.value = 0.05 + this.glow * 0.80;
-    this.uniforms.uGain.value = 0.30 + this.glow * 0.60;
-    // drżenie powierzchni WYŁĄCZNIE od basu (wokal już jej nie rusza)
-    this.uniforms.uWobble.value = 0.015 + bassG * 0.28; // do ~0.30 — wyraźne fałdy
+    // szeroki, ale niezbyt przepalony zakres: ciemny bursztyn -> jasne złoto
+    this.uniforms.uEnergy.value = 0.05 + this.glow * 0.78;
+    // Jasność trzymana PONIŻEJ progu blooma: kula ma czytać się jako bursztyn
+    // z widocznymi fałdami; do bieli strzela tylko uWhite (mocny dźwięk).
+    this.uniforms.uGain.value = 0.26 + this.glow * 0.46;
+    this.uniforms.uFlash.value = this.flash;
+    this.uniforms.uWhite.value = this.white;
+    // Amplituda przemieszczenia: spokój 1.8% promienia, pełne fałdy basu ~5.3%.
+    // Żebro bitu (uBeat) siedzi w polu funkcji, więc dokłada się samo — razem
+    // najgorszy przypadek ~20% promienia: mocno widać, kula się nie rozlatuje.
+    this.uniforms.uWobble.value = 0.018 + bassG * 0.035;
 
-    this.mesh.scale.setScalar(1.0 + beatPulse * 0.12 + energySmooth * 0.25);
+    this.mesh.scale.setScalar(this.scale);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,
-    // nie zalewać sceny (audit: "nie oświetlać jakoś bardzo sceny do góry")
-    this.light.intensity = 1.2 + this.glow * 2.8;
-    this.light.distance = 15;
-    this.haloMat.opacity = 0.06 + this.glow * 0.07;
-
-    // --- cząstki ---
-    const pos = this.pPos;
-    const vel = this.pVel;
-    let alive = false;
-    for (let i = 0; i < P_MAX; i++) {
-      if (this.pAge[i] >= this.pLife[i]) { this.pAlpha[i] = 0; continue; }
-      alive = true;
-      this.pAge[i] += dt;
-      const drag = 1 - Math.min(0.9, 1.6 * dt);
-      vel[i * 3] *= drag;
-      vel[i * 3 + 1] = vel[i * 3 + 1] * drag - 2.2 * dt; // lekka grawitacja
-      vel[i * 3 + 2] *= drag;
-      pos[i * 3] += vel[i * 3] * dt;
-      pos[i * 3 + 1] += vel[i * 3 + 1] * dt;
-      pos[i * 3 + 2] += vel[i * 3 + 2] * dt;
-      const k2 = 1 - this.pAge[i] / this.pLife[i];
-      this.pAlpha[i] = k2 * k2 * 1.2;
-    }
-    if (alive || this.pDirty) {
-      this.pGeo.attributes.position.needsUpdate = true;
-      this.pGeo.attributes.aAlpha.needsUpdate = true;
-      this.pGeo.attributes.aSize.needsUpdate = true;
-      this.pDirty = alive;
-    }
+    // nie zalewać sceny (audit: „nie oświetlać jakoś bardzo sceny do góry")
+    this.light.intensity = 1.2 + this.glow * 2.8 + this.white * 2.6;
+    this.light.distance = 15 + this.scale * 4;
+    this.haloMat.opacity = 0.06 + this.glow * 0.07 + this.white * 0.10;
+    // halo MUSI zmieniać barwę razem z kulą — inaczej additive krem zjada akcent
+    // koloru na bicie (kula wygląda na białą mimo czerwonego tintu)
+    const fr = this.flash;
+    const wh = this.white;
+    this.haloMat.color.setRGB(
+      1.0,
+      ((0.81 * (1 - fr) + 0.34 * fr) * (1 - wh) + wh),
+      ((0.54 * (1 - fr) + 0.16 * fr) * (1 - wh) + wh)
+    );
   }
 }
