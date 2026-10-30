@@ -19,7 +19,10 @@
     cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(217,152,74,.25); }
   button:hover { background: rgba(217,152,74,.12); }
   /* ---------- panel H: wszystkie parametry „inne" jako słupki ---------- */
-  #hud { position: fixed; left: 46px; bottom: 44px; z-index: 1; width: 318px;
+  #hud { position: fixed; left: 46px; bottom: 44px; z-index: 1;
+    width: min(752px, calc(100vw - 96px));
+    max-height: min(76vh, 720px); overflow-y: auto; overscroll-behavior: contain;
+    display: flex; flex-direction: column; /* nagłówek + dwie kolumny treści */
     box-sizing: border-box; padding: 9px 11px 10px; border-radius: 13px;
     background: rgba(9,5,2,.55); backdrop-filter: blur(11px) saturate(125%);
     -webkit-backdrop-filter: blur(11px) saturate(125%);
@@ -27,10 +30,32 @@
     box-shadow: 0 16px 46px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,207,138,.045);
     font: 10px/1.35 ui-monospace, Consolas, monospace; color: rgba(236,223,200,.7);
     opacity: .94; transition: opacity .22s ease, transform .22s ease, left .22s ease; }
+  #hud::-webkit-scrollbar { width: 5px; }
+  #hud::-webkit-scrollbar-thumb { background: rgba(217,152,74,.22); border-radius: 3px; }
+  #hud::-webkit-scrollbar-track { background: transparent; }
+  /* sekcja jednej ścieżki — nie rozrywa się między kolumnami */
+  #hud .cols { display: flex; gap: 20px; align-items: flex-start; }
+  #hud .cols > .col { flex: 1 1 0; min-width: 0; }
+  #hud .pstm { margin: 0 0 9px; }
+  #hud .pstm:last-child { margin-bottom: 0; }
+  #hud .sh { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    font-size: 8.5px; letter-spacing: .16em; text-transform: uppercase;
+    color: rgba(255,207,138,.8); padding: 4px 0 3px; margin-bottom: 3px;
+    border-top: 1px solid rgba(217,152,74,.14); cursor: pointer; user-select: none; }
+  #hud .sh .nm { color: #ffcf8a; white-space: nowrap; }
+  #hud .sh .rl { font-size: 7.5px; letter-spacing: .1em; color: rgba(255,207,138,.33);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+  #hud .pstm.fold > .sb, #hud .pstm.dbg.fold > .grp { display: none; }
+  #hud .pstm.fold > .sh { opacity: .5; }
+  /* wiersz diagnostyczny: etykieta + tekst zamiast słupka */
+  #hud .row.kv .lb { width: auto; flex: 0 1 auto; }
+  #hud .row.kv .vv { flex: 1 1 auto; text-align: right; font-size: 9.5px;
+    color: rgba(255,207,138,.72); font-variant-numeric: tabular-nums;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #hud.off { opacity: 0; transform: translateY(6px); pointer-events: none; }
   /* lista ścieżek otwarta: panel H odsuwa się w prawo, nie zasłania się nawzajem */
   body.panel-open #hud { left: 238px; }
-  #hud .hd { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  #hud .hd { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
     font-size: 8.5px; letter-spacing: .13em; text-transform: uppercase;
     color: rgba(255,207,138,.5); padding-bottom: 6px; margin-bottom: 6px;
     border-bottom: 1px solid rgba(217,152,74,.11); }
@@ -41,7 +66,7 @@
     color: rgba(217,152,74,.44); margin: 0 0 3px 1px; }
   #hud .row { display: flex; align-items: center; gap: 7px; height: 12px; }
   #hud .row.vec { height: 20px; }
-  #hud .lb { flex: none; width: 78px; color: rgba(236,223,200,.52); font-size: 9.5px;
+  #hud .lb { flex: none; width: 74px; color: rgba(236,223,200,.52); font-size: 9.5px;
     letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* • przy parametrach, które sterują iskrami (peak, centroid) */
   #hud .lb.drv { color: rgba(255,214,150,.92); }
@@ -52,7 +77,7 @@
     transform: scaleX(0); transform-origin: 0 50%;
     background: linear-gradient(90deg, rgba(217,152,74,.8), rgba(255,214,150,.95));
     box-shadow: 0 0 7px rgba(255,207,138,.3); will-change: transform; }
-  #hud .vl { flex: none; width: 58px; font-size: 9.5px; text-align: right; color: rgba(255,207,138,.62);
+  #hud .vl { flex: none; width: 54px; font-size: 9.5px; text-align: right; color: rgba(255,207,138,.62);
     font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
   #hud .strip { flex: 1 1 auto; display: flex; align-items: flex-end; gap: 1px;
     height: 16px; }

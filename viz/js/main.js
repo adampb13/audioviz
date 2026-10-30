@@ -12,10 +12,12 @@ import { Mountains } from "./mountains.js";
 import { Atmosphere } from "./atmosphere.js";
 import { createPost } from "./postfx.js";
 import { createSettings } from "./settings.js";
-import { createInneHud } from "./hud.js";
+import { createHud } from "./hud.js";
 import { Sparks } from "./particles.js";
 
 const params = new URLSearchParams(location.search);
+// ?debug = sonda + ślad klatek (ring 900 klatek ≈ 6 s przy 144 fps)
+const DEBUG = params.has("debug");
 const TRACK = params.get("track") || "blindinglights";
 const AUDIO_DIR = `../data/${TRACK}/`;
 const FOG_DENSITY = 0.009; // FogExp2 0x1a0f08, 0.009 (audit v2 P0-C)
@@ -220,8 +222,8 @@ let fpsI = 0, fpsN = 0;
 const btn = document.getElementById("start");
 const overlay = document.getElementById("overlay");
 const hud = document.getElementById("hud");
-// panel H: wszystkie 21 parametrów ścieżki „inne" jako słupki (hud.js)
-const hudPanel = createInneHud(track);
+// panel H: WSZYSTKIE parametry wszystkich czterech ścieżek + diagnostyka (hud.js)
+const hudPanel = createHud(track);
 hud.textContent = "";
 hud.appendChild(hudPanel.el);
 // informacje domyślnie schowane — klawisz H pokazuje/ukrywa podgląd stanu
@@ -304,6 +306,18 @@ resetCursors(demoT);
 const clock = new THREE.Clock();
 let hudTimer = 0, fps = 60, prevT = 0;
 window.__viz = {};
+// pierścieniowy ślad klatek (?debug) + dostęp do niego z konsoli: __trace(300)
+const TRACE_N = 900;
+const trace = new Array(TRACE_N).fill(null);
+let traceI = 0;
+window.__trace = (n = TRACE_N) => {
+  const out = [];
+  for (let i = 0; i < TRACE_N; i++) {
+    const v = trace[(traceI + i) % TRACE_N];
+    if (v) out.push(v);
+  }
+  return out.slice(-n);
+};
 
 renderer.info.autoReset = false; // ręczny reset — info liczy CAŁĄ klatkę (scena+passy)
 function frame() {
@@ -323,7 +337,7 @@ function frame() {
   safeReset(sparks, "reset");
   }
   prevT = t;
-  if (hudOn) hudPanel.bars(t); // panel H: słupki 60 fps, tylko gdy widoczny
+  if (hudOn) hudPanel.bars(t, dt); // panel H: słupki 30 fps, tylko gdy widoczny
 
   // próbki surowe (interpolacja między klatkami) -> stan tłumiony (damp)
   // Gain ścieżek z panelu: 0 = wyciszona, jej sygnał nie wchodzi do animacji.
@@ -345,7 +359,7 @@ function frame() {
   const vProbT = vProbRaw * g.wokal;
   const vMidiT = vMidiRaw;
   const vCentT = clamp(vCentRaw / track.vCentP95, 0, 1) * g.wokal;
-  const bRmsT = bRmsRaw * g.bas;
+  const bRmsT = clamp(bRmsRaw / track.bRmsP95, 0, 1) * g.bas; // 0..1 w skali basu
   const bCentT = clamp(bCentRaw / track.bCentP95, 0, 1) * g.bas;
   const dRmsT = dRmsRaw * g.bebny;
   const oRmsT = oRmsRaw * g.inne;
@@ -363,7 +377,9 @@ function frame() {
   S.vProb = damp(S.vProb, vProbT, vProbT > S.vProb ? 17.3 : 4.4, dt);
   S.vMidi = damp(S.vMidi, vMidiT, 5.0, dt);
   S.vCent = damp(S.vCent, vCentT, 5.0, dt);
-  S.bRms = damp(S.bRms, bRmsT, 7.7, dt);
+  // bas: struktura kuli ma nadążać za dźwiękiem (atak ~40 ms, powrót ~200 ms) —
+  // przy 7.7/s obwiednia gubiła się za uderzeniem i faktura „doganiała" bas
+  S.bRms = damp(S.bRms, bRmsT, bRmsT > S.bRms ? 25.0 : 5.0, dt);
   S.bCent = damp(S.bCent, bCentT, 5.0, dt);
   S.dRms = damp(S.dRms, dRmsT, 7.7, dt);
   S.oRms = damp(S.oRms, oRmsT, 7.7, dt);
@@ -445,7 +461,12 @@ function frame() {
   }
 
   // barwa sfery idzie za energią całości (core.glow) — nie za „inne"
-  core.update(t, dt, S.energy, S.beatPulse, S.bRms);
+  // Struktura kuli dostaje SUROWY (znormalizowany) bas: wygładza go tylko
+  // JEDEN filtr, ten w core (atak 16/s). Podwójne tłumienie (S.bRms 25/s
+  // + core 14/s) dawało razem ~120 ms opóźnienia faktury za uderzeniem —
+  // teraz jest jeden stopień i ~70 ms. S.bRms zostaje jako wartość do
+  // odczytu w panelu H / sondzie.
+  core.update(t, dt, S.energy, S.beatPulse, bRmsT);
   ribbon.update(t, track, dt, g.wokal);
   atmosphere.update(t, dt, S.energy, S.tempo);
   // pełny exposure tylko w piku (audit v2 P1)
@@ -457,6 +478,21 @@ function frame() {
   camera.position.y = 7 + Math.sin(t * 0.07) * 0.4;
   camera.position.z = 22;
   camera.lookAt(0, 3, 0);
+
+  // ŚLAD KLATEK (?debug): surowe próbki vs stan sceny w KAŻDEJ klatce.
+  // __viz odświeża się 4×/s, więc do pomiaru opóźnienia (np. „bas a struktura
+  // kuli") potrzebny jest zapis per-klatka — inaczej rozdzielczość to 250 ms.
+  if (DEBUG) {
+    trace[traceI] = {
+      t: +t.toFixed(3),
+      v: +vRmsT.toFixed(4), b: +bRmsT.toFixed(4), be: +S.bRms.toFixed(4),
+      d: +dRmsT.toFixed(4), o: +oRmsT.toFixed(4), e: +energyT.toFixed(4),
+      st: +core.uniforms.uStruct.value.toFixed(4), cb: +core.bass.toFixed(4),
+      g: +core.glow.toFixed(4),
+      p: +S.beatPulse.toFixed(4),
+    };
+    traceI = (traceI + 1) % TRACE_N;
+  }
 
   post.grade.uniforms.uTime.value = t;
   post.composer.render();
@@ -475,14 +511,41 @@ function frame() {
     const fpsP95 = Math.round(sorted[Math.floor((fpsN - 1) * 0.05)] || 0); // dolne 5%
     const calls = renderer.info.render.calls;
     const tris = renderer.info.render.triangles;
+    const audioEl = masterAudio();
     hudPanel.text(t, {
       section: sec, sections: track.sections.length,
-      fps, waves: S.wavesFired, muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]).join(" "),
+      fps, fpsP95, waves: S.wavesFired, calls, tris,
+      muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]).join(" "),
+      dt, px: renderer.getPixelRatio(),
+      // zegar: t sceny vs currentTime elementu — rozjazd = źródło „opóźnienia"
+      t, audioT: demoMode || !audioEl ? null : audioEl.currentTime, seekT,
+      state: demoMode ? "demo" : playing ? "gra" : "pauza",
+      core: {
+        glow: core.glow, scale: core.scale, pulse: core.pulse,
+        uStruct: core.uniforms.uStruct.value, uWobble: core.uniforms.uWobble.value,
+        bass: core.bass, radius: core.surfaceRadius(),
+      },
+      // surowe próbki tej klatki vs wygładzone obwiednie, które widzi scena
+      raw: { vRms: vRmsRaw, bRms: bRmsT, dRms: dRmsRaw, oRms: oRmsRaw, energy: energyT },
+      // bas: obwiednia SCENY (w core), nie pomocnicze S.bRms — to ona rusza kulą
+      env: { vRms: S.vRms, bRms: core.bass, dRms: S.dRms, oRms: S.oRms, energy: S.energy },
+      tempo: S.tempo,
+      sparks: {
+        alive: sparks.alive, pool: sparks.pool ?? 0, fired: S.sparksFired,
+        env: S.sparkEnv, bright: S.sparkBright, peak: oPeakPrev,
+      },
+      dropEnv: S.dropEnv, onsets: S.onsetsFired, bursts: S.bursts, otherHits: S.otherHits,
+      track: TRACK, duration: track.duration,
+      gains: `w${settings.gain.wokal} b${settings.gain.bas} d${settings.gain.bebny} i${settings.gain.inne}`,
+      ctxLost,
     });
     window.__viz = {
       t, section: sec, sections: track.sections.length,
       vRms: S.vRms, vProb: S.vProb, vMidi: S.vMidi, vCent: S.vCent,
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
+      // surowe (znormalizowane) próbki tej klatki — do pomiaru opóźnienia sceny
+      bRaw: +bRmsT.toFixed(4), dRaw: +dRmsT.toFixed(4), oRaw: +oRmsT.toFixed(4),
+      vRaw: +vRmsT.toFixed(4),
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
       otherHits: S.otherHits,

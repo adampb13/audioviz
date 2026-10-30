@@ -102,6 +102,10 @@ export class Track {
 
     // bas
     this.bRms = toF32(b.rms_norm);
+    // p95 głośności basu — struktura kuli normalizuje się do WŁASNEGO zakresu
+    // basu (max utworu to 0.43), a nie do 0..1; bez tego bramka 0.30..0.92
+    // łapała dopiero górne 25% basu i kula stała prawie gładka
+    this.bRmsP95 = percentile(b.rms_norm, 95) || 1;
     this.bPeak = toF32(b.peak);
     this.bPeakP95 = percentile(b.peak, 95) || 1;
     this.bCent = toF32(b.centroid_hz);
@@ -156,14 +160,30 @@ export class Track {
     this.bassBeatS = new Float32Array(this.bassBeatT.length).fill(1);
     [this.otherOnsetT, this.otherOnsetS] = onsety(S.inne);
 
-    // ---- WSZYSTKIE parametry ramkowe ścieżki „inne" (panel H) ----
+    // ---- WSZYSTKIE parametry ramkowe KAŻDEJ ścieżki (panel H) ----
+    // Jedna definicja dla wszystkich stemów: panel H pokazuje ten sam zestaw
+    // 21 pól dla wokal / bas / bebny / inne (bębny nie mają pól pitch*).
     // Packowane frame-major: data[i*k + j], gdzie i = ramka, j = pasmo.
     // Wektorowe pola w JSON są pasmowo (mel_db: 32 × n_frames), skalary: n_frames.
-    // Skala słupka (lo..hi) liczona RAZ przy starcie z p98 wartości bezwzględnej —
-    // jeden głośny moment nie ściska całej skali, a inny utwór działa bez zmian.
-    const packScalar = (field) => toF32(o[field] || []);
-    const packBands = (field) => {
-      const bands = o[field] || [];
+    // Skala słupka (lo..hi) jest STAŁA dla wielkości unormowanych (0..1, dB, midi)
+    // i liczona jako p98 wartości bezwzględnej dla reszty — jeden głośny moment
+    // nie ściska całej skali, a inny utwór działa bez zmian.
+    const ABS_RANGE = {
+      rms_norm: [0, 1], onset_norm: [0, 1], pitch_voiced_prob: [0, 1],
+      chroma: [0, 1], chroma_active: [0, 12],
+      rms_db: [-60, 0], mel_db: [-60, 22],
+      tempo_local_bpm: [60, 180], pitch_midi: [36, 84], pitch_hz: [0, 1000],
+    };
+    const FIELDS = [
+      ["rms", 0, 3], ["rms_norm", 0, 3], ["rms_db", 0, 1], ["peak", 0, 3], ["zcr", 0, 3],
+      ["centroid_hz", 0, 0], ["bandwidth_hz", 0, 0], ["rolloff_hz", 0, 0],
+      ["flatness", 0, 3], ["spectral_contrast", 1, 1], ["dominant_hz", 0, 0],
+      ["mel_db", 1, 1], ["mfcc", 1, 1], ["chroma", 1, 2], ["chroma_active", 0, 0],
+      ["onset_strength", 0, 2], ["onset_norm", 0, 3], ["tempo_local_bpm", 0, 1],
+      ["pitch_hz", 0, 0], ["pitch_midi", 0, 1], ["pitch_voiced_prob", 0, 3],
+    ];
+    const packBands = (frames, field) => {
+      const bands = frames[field] || [];
       const k = bands.length || 1;
       const out = new Float32Array(this.n * k);
       for (let j = 0; j < k; j++) {
@@ -179,38 +199,37 @@ export class Track {
       for (let i = 0; i < data.length; i++) a[i] = Math.abs(data[i]);
       return percentile(a, 98) || 1;
     };
-    // range = [lo, hi] gdy skala jest umowna (dB, Hz, midi); brak = 0..p98
-    const P = (id, data, range = null, dec = 3) => ({
-      id, label: id, // etykieta w panelu H = nazwa pola z JSON
-      k: data.length / this.n,
-      data,
-      lo: range ? range[0] : 0,
-      hi: range ? range[1] : p98abs(data),
-      dec,
-    });
-    this.inneParams = [
-      P("rms", packScalar("rms"), [0, 0.25]),
-      P("rms_norm", packScalar("rms_norm"), [0, 1]),
-      P("rms_db", packScalar("rms_db"), [-60, 0], 1),
-      P("peak", packScalar("peak"), [0, 0.6]),
-      P("zcr", packScalar("zcr"), [0, 0.35]),
-      P("centroid_hz", packScalar("centroid_hz"), [0, this.oCentP95], 0),
-      P("bandwidth_hz", packScalar("bandwidth_hz"), null, 0),
-      P("rolloff_hz", packScalar("rolloff_hz"), null, 0),
-      P("flatness", packScalar("flatness"), [0, 0.19]),
-      P("spectral_contrast", packBands("spectral_contrast"), null, 1),
-      P("dominant_hz", packScalar("dominant_hz"), null, 0),
-      P("mel_db", packBands("mel_db"), [-60, 22], 1),
-      P("mfcc", packBands("mfcc"), null, 1),
-      P("chroma", packBands("chroma"), [0, 1], 2),
-      P("chroma_active", packScalar("chroma_active"), [0, 12], 0),
-      P("onset_strength", packScalar("onset_strength"), null, 2),
-      P("onset_norm", packScalar("onset_norm"), [0, 1]),
-      P("tempo_local_bpm", packScalar("tempo_local_bpm"), [60, 180], 1),
-      P("pitch_hz", forwardFill(o.pitch_hz || []), [0, 1000], 0), // null = bez tonu
-      P("pitch_midi", forwardFill(o.pitch_midi || []), [36, 84], 1),
-      P("pitch_voiced_prob", packScalar("pitch_voiced_prob"), [0, 1]),
-    ];
+    // Jedna ścieżka → lista parametrów do panelu H. Pola, których stem nie ma
+    // (bębny nie mają pitch*), po prostu nie trafiają do listy.
+    const buildParams = (frames) => {
+      const out = [];
+      for (const [field, vec, dec] of FIELDS) {
+        const raw = frames[field];
+        if (!raw || (vec ? !raw.length : !raw.length)) continue;
+        let data;
+        if (vec) data = packBands(frames, field);
+        else if (field === "pitch_hz" || field === "pitch_midi") data = forwardFill(raw);
+        else data = toF32(raw);
+        const range = ABS_RANGE[field] || null;
+        out.push({
+          id: field,
+          label: field, // etykieta w panelu H = nazwa pola z JSON
+          k: data.length / this.n,
+          data,
+          lo: range ? range[0] : 0,
+          hi: range ? range[1] : p98abs(data),
+          dec,
+        });
+      }
+      return out;
+    };
+    this.stemParams = {
+      wokal: buildParams(w),
+      bas: buildParams(b),
+      bebny: buildParams(d),
+      inne: buildParams(o),
+    };
+    this.inneParams = this.stemParams.inne; // zgodność wstecz (stary kod/README)
 
     // Sekcje z wokalu (najlepiej oddaje strukturę zwrotka/refren)
     this.sections = S.wokal.events.sections.map(([s, e]) => ({ start: s, end: e }));

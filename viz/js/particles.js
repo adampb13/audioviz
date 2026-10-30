@@ -80,6 +80,7 @@ export class Sparks {
     this.phase = new Float32Array(MAX); // faza kołysania
     this.next = 0;
     this.alive = 0;
+    this.pool = MAX; // rozmiar puli — panel H pokazuje „żywe / pula"
     this.spawned = 0;
     this.side = -1; // następna iskra: lewa (-1) czy prawa (+1)
     this.lastLoud = 0;   // diagnostyka: czym ostatnio sterowano iskrą

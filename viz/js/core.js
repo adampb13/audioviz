@@ -25,11 +25,14 @@ import { NOISE_GLSL, PAL } from "./glsl.js";
 // Deformacja jest CIĄGŁA: jedno wygładzone pole `uStruct` (obecność basu),
 // żadnych impulsów „na bit" — kula faluje płynnie, bez uderzeń faktury.
 const DISP_GLSL = /* glsl */ `
-uniform float uTime;
+uniform float uFlow;     // SKUMULOWANA faza falowania (JS: += dt * tempo)
 uniform float uStruct;   // 0..1 — obecność basu: gęstsze, głębsze falowanie
 float dispAt(vec3 n) {
-  // falowanie płynie CAŁY CZAS, bas zmienia tylko jego tempo — bez skoków na bicie
-  float tt = uTime * (0.14 + 0.30 * uStruct);
+  // Faza jest CAŁKOWANA w JS, a nie liczona jako uTime * tempo: przy zmianie
+  // tempa (bas wchodzi) uTime * k przeskakiwałoby o kilkadziesiąt jednostek
+  // i całe pole szumu przetasowywało się w jednej klatce — faktura „przewijała
+  // się" dopiero po uderzeniu. Teraz bas tylko przyspiesza płynięcie.
+  float tt = uFlow;
   float nf = 1.15 + uStruct * 0.85;           // 2-3 garby na kulę: 1.15 → 2.00
   float amp = 0.45 + 0.80 * uStruct;
   float d = snoise(n * nf + vec3(0.0, tt, 0.0)) * 0.72;
@@ -39,7 +42,7 @@ float dispAt(vec3 n) {
 `;
 
 const VERT = /* glsl */ `
-uniform float uWobble;   // uTime, uStruct deklaruje DISP_GLSL poniżej
+uniform float uWobble;   // uFlow, uStruct deklaruje DISP_GLSL poniżej
 varying vec3 vN;
 varying vec3 vWorld;
 varying vec3 vObj;
@@ -83,7 +86,6 @@ ${NOISE_GLSL}
 const float ENERGY = 0.45;  // poziom żaru: ciemny bursztyn -> jasne złoto
 const float GAIN = 0.50;    // jasność bazowa
 const float HOT = 0.50;     // temperatura górnego końca (bursztyn <-> krem)
-uniform float uTime;
 uniform float uGlow;   // 0..1 — energia całości: złoto -> rozświetlona
 uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
 varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
@@ -151,7 +153,7 @@ export class CoreSphere {
 
     const geo = new THREE.SphereGeometry(R_BASE, 144, 144); // gęsta siatka: fałdy gładkie, bez faset
     this.uniforms = {
-      uTime: { value: 0 },
+      uFlow: { value: 0 },
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
       uGlow: { value: 0 },
@@ -184,6 +186,7 @@ export class CoreSphere {
 
     // obwiednie (czysto JS)
     this.bass = 0;  // CIĄGŁA, wygładzona obecność basu (struktura)
+    this.flow = 0;  // skumulowana faza falowania powłoki (całka tempa)
     this.pulse = 0; // puls od uderzenia w bębny (rozmiar, szybki ale gładki)
     this.scale = 1; // wygładzony rozmiar bazowy (z energii całości)
     this.glow = 0;  // 0..1 — rozświetlenie barwy (ta sama energia całości)
@@ -198,10 +201,11 @@ export class CoreSphere {
   }
 
   update(t, dt, energySmooth, beatPulse, bassEnv) {
-    // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia jest wygładzona
-    // dwustronnie (atak 3.2/s, puszczenie 1.8/s), więc faktura „oddycha"
-    // razem z obecnością basu, a nie drga na każdym jego bicie.
-    const kb = bassEnv > this.bass ? 3.2 : 1.8;
+    // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia jest wciąż
+    // wygładzona (atak 16/s ≈ 62 ms, puszczenie 3.6/s ≈ 280 ms), ale na tyle
+    // szybka, że faktura zmienia się RAZEM z basem, a nie pół sekundy po nim;
+    // powrót jest 3.5× wolniejszy, więc kula nie drga na każdym bicie.
+    const kb = bassEnv > this.bass ? 16.0 : 3.6;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
 
     // ROZMIAR — bazowo z energii całości, a na to puls bębnów.
@@ -226,13 +230,19 @@ export class CoreSphere {
     this.uniforms.uGlow.value = this.glow;
     const scalePulse = this.scale * (1 + BEAT_GROW * this.pulse);
 
-    this.uniforms.uTime.value = t;
-    // struktura TYLKO przy MOCNO obecnym basie: poniżej 0.55 kula jest
-    // gładka, powyżej 0.90 marszczy się na maksa (smoothstep = bez skoku)
-    const st0 = 0.30, st1 = 0.92;
+    // struktura TYLKO przy MOCNO obecnym basie: poniżej 0.25 kula jest
+    // gładka, powyżej 0.90 marszczy się na maksa (smoothstep = bez skoku).
+    // Bas jest znormalizowany do p95 utworu, więc progi znaczą to samo
+    // w każdym utworze — wcześniej surowe rms_norm rzadko przekraczało 0.3
+    // i faktura prawie nigdy się nie włączała.
+    const st0 = 0.25, st1 = 0.90;
     const q = Math.min(1, Math.max(0, (this.bass - st0) / (st1 - st0)));
     const bassG = q * q * (3 - 2 * q);
     this.uniforms.uStruct.value = bassG;
+    // faza falowania całkowana z tempa: bas przyspiesza płynięcie, ale nigdy
+    // nie przeskakuje — wzór i kolejność mają znaczenie (bassG policzony wyżej)
+    this.flow += dt * (0.14 + 0.30 * bassG);
+    this.uniforms.uFlow.value = this.flow;
     // Amplituda przemieszczenia: spokój 1.4% promienia, pełne fałdy basu ~4.8%.
     // Bas zmienia TYLKO tę amplitudę — deformacja jest ciągła, bez impulsów.
     this.uniforms.uWobble.value = 0.014 + bassG * 0.034;
