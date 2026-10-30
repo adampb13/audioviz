@@ -89,16 +89,16 @@ void main() {
   vec3 beatTint = vec3(1.0, 0.24, 0.08);
   base = mix(base, beatTint, clamp(uFlash * 0.95, 0.0, 1.0));
 
-  // MOCNY/GŁOŚNY dźwięk: chwilowe rozbłysknięcie do czystej bieli
-  base = mix(base, vec3(1.0), clamp(uWhite, 0.0, 1.0));
+  // MOCNE uderzenie „inne" (klawisze): kolor idzie w stronę ciepłej bieli,
+  // ale tylko do połowy i przez jasność — ma być GLOW, nie błysk lampy.
+  base = mix(base, vec3(1.0, 0.92, 0.80), clamp(uWhite * 0.45, 0.0, 1.0));
 
   // jasność zmienia TYLKO głośność „inne" (uGain) i biel (uWhite); akcent barwy
   // (uFlash) nie podnosi jasności — inaczej kolor natychmiast przepalał się do bieli
-  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.05 + uWhite * 0.45);
-  // miękki sufit: spokojny żar nie przepala się, ale biały błysk może dobić do 255
-  // sufit trzyma spokojny żar PONIŻEJ odbarwienia (ACES nie myje go do bieli),
-  // a biały błysk otwiera go do 2.0 — wtedy bloom naprawdę przepala kulę
-  float cap = 0.72 + 1.28 * clamp(uWhite, 0.0, 1.0);
+  vec3 col = base * (0.72 + fres * 0.85) * (uGain + uFlash * 0.05 + uWhite * 0.40);
+  // miękki sufit: spokojny żar trzyma się PONIŻEJ odbarwienia (ACES nie myje go do
+  // bieli), a rozjaśnienie otwiera go tylko do 1.22 — poświata bez przepalenia
+  float cap = 0.72 + 0.26 * clamp(uWhite, 0.0, 1.0);
   col = cap * tanh(col / cap);
   gl_FragColor = vec4(col, 1.0);
 }
@@ -186,26 +186,28 @@ export class CoreSphere {
   otherHit(strength, loudness = 1) {
     const s = Math.min(1, Math.max(0, strength));
     this.flash = Math.max(this.flash, 0.30 + 0.70 * s);
-    // Biel dopiero wtedy, gdy jest NAPRAWDĘ głośno (loudness = energia całości)
-    // i transient jest mocny: cichy klawisz w cichym fragmencie nie przepala kuli.
-    const w = Math.min(1, ss(0.52, 0.88, loudness) * (0.45 + 0.75 * s));
+    // Biel dopiero wtedy, gdy jest naprawdę głośno (loudness = energia całości)
+    // i transient jest mocny — i tylko jako rozjaśnienie z poświatą, nie błysk.
+    // bramka na głośność SAMEJ ścieżki „inne" (loudness = oRms/oRmsP95), nie na
+    // energię całości: inaczej po wyciszeniu basu ciche klawisze nie rozjaśniają
+    // kuli, a w pełnym miksie rozjaśniał ją bas.
+    // sufit 0.85: rozjaśnienie z poświatą, nigdy lampa błyskowa
+    const w = Math.min(0.85, ss(0.38, 0.74, loudness) * (0.40 + 0.65 * s));
     if (w > 0.06) this.white = Math.max(this.white, w);
   }
 
-  // MOCNY dźwięk bez udziału „inne" (drop, akcent basu) — krótki rozbłysk do bieli
+  // DROP: bas uderza mocniej — struktura dostaje grubsze żebro. Koloru NIE
+  // dotykamy: barwa i biel należą wyłącznie do „inne".
   loudHit(v = 1) {
     const s = Math.min(1, Math.max(0, v));
-    this.white = Math.max(this.white, s);
-    this.flash = Math.max(this.flash, 0.55 * s);
+    this.beat = Math.max(this.beat, 0.85 * s);
   }
 
-  // KAŻDY bit „bas" — mocna zmiana struktury (żebro biegnące po kuli)
-  bassPulse(strength, loudness = 1) {
+  // KAŻDY bit „bas" — WYŁĄCZNIE struktura (żebro biegnące po kuli).
+  // Bas nie ma prawa dotknąć koloru ani bieli.
+  bassPulse(strength) {
     const s = Math.min(1, Math.max(0.2, strength));
     this.beat = Math.max(this.beat, 0.55 + 0.45 * s);
-    // mocny bit basu w głośnym fragmencie = krótki rozbłysk do bieli
-    const w = Math.min(1, ss(0.56, 0.90, loudness) * (0.35 + 0.80 * s));
-    if (w > 0.06) this.white = Math.max(this.white, w);
   }
 
   // energySmooth: energia całości (rozmiar); beatPulse: puls bębnów (rozmiar);
@@ -256,17 +258,17 @@ export class CoreSphere {
     this.mesh.scale.setScalar(this.scale);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,
     // nie zalewać sceny (audit: „nie oświetlać jakoś bardzo sceny do góry")
-    this.light.intensity = 1.2 + this.glow * 2.8 + this.white * 2.6;
+    this.light.intensity = 1.2 + this.glow * 2.8 + this.white * 1.1;
     this.light.distance = 15 + this.scale * 4;
-    this.haloMat.opacity = 0.06 + this.glow * 0.07 + this.white * 0.10;
+    this.haloMat.opacity = 0.06 + this.glow * 0.07 + this.white * 0.05;
     // halo MUSI zmieniać barwę razem z kulą — inaczej additive krem zjada akcent
     // koloru na bicie (kula wygląda na białą mimo czerwonego tintu)
     const fr = this.flash;
     const wh = this.white;
     this.haloMat.color.setRGB(
       1.0,
-      ((0.81 * (1 - fr) + 0.34 * fr) * (1 - wh) + wh),
-      ((0.54 * (1 - fr) + 0.16 * fr) * (1 - wh) + wh)
+      ((0.81 * (1 - fr) + 0.34 * fr) * (1 - wh * 0.85) + wh * 0.85),
+      ((0.54 * (1 - fr) + 0.16 * fr) * (1 - wh * 0.85) + wh * 0.85)
     );
   }
 }

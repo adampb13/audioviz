@@ -303,7 +303,7 @@ function frame() {
     if (!g.inne) return;               // wyciszone „inne” = sfera bez błysków
     if (s < 0.02 || t - lastOther < 0.04) return;
     lastOther = t;
-    core.otherHit(s, S.energy);
+    core.otherHit(s, clamp(S.oRms / (track.oRmsP95 || 1), 0, 1));
   });
   // KAŻDY bit „bas” -> mocna zmiana STRUKTURY kuli (żebro biegnące po powierzchni).
   // Bez progu siły; pomijamy tylko bity, gdy bas w ogóle nie gra.
@@ -311,7 +311,7 @@ function frame() {
     S.bassHits++;
     if (!g.bas) return;                // wyciszony „bas” = kula gładka, bez żebra
     if (S.bRms < 0.12) return;
-    core.bassPulse(clamp(S.bRms * 1.5, 0.2, 1), S.energy);
+    core.bassPulse(clamp(S.bRms * 1.5, 0.2, 1));
   });
   // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).
   // Warunki: skok > 0.20, teraz naprawdę głośno (>0.55), tło jeszcze ciche
