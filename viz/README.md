@@ -19,8 +19,8 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 - `?track=<nazwa>` — utwór = katalog w `data/` (domyślnie `blindinglights`).
   Wymaga `data/<nazwa>/analysis.json` + stemów `wokal/bas/bebny/inne.wav`
   (wav-y są poza repo — odtwarzalne przez `separate.py` + `analyze_stems.py`).
-  Kolor sfery jest stały — nie zależy od żadnej ścieżki, więc dodatkowa analiza
-  „inne” (akcenty, centroid) nie jest do sceny potrzebna.
+  Kolor sfery zależy od energii całości, a pojedyncze iskry po bokach — od
+  `peak` ścieżki „inne”, więc obie ścieżki muszą być w analizie.
 - `?demo&t=123` — start bez gestu użytkownika, od 123 s (zegar własny, bez audio).
 - `Spacja` — pauza · `H` — panel HUD · `S` — panel ścieżek · `#err` — błędy JS ·
   `window.__viz` — sonda stanu (`t, energy, dropEnv, dropLog, bursts, fpsP95, calls,
@@ -38,7 +38,7 @@ każdą parę „ścieżka → obiekt” testuje się bez grzebania w kodzie:
 | `wokal` | wstęga zjeżdża do cienkiej nici (szerokość 0.16 m, bez falowania) |
 | `bas` | kula wygładza się do idealnej kuli, zero struktury i zero żebra na bit, zero rozbłysku na drop |
 | `bebny` | zero fal na ziemi i zero pulsu sfery (już puszczone fale dożywają) |
-| `inne` | **brak wpływu na kulę** — kolor sfery jest stały (decyzja: usunięta cała logika zmiany koloru przez „inne”); „inne” dalej wchodzi w energię całości (rozmiar) |
+| `inne` | **zero iskier** po bokach kuli (wchodzi dalej w energię całości → rozmiar i kolor sfery) |
 
 Energia to mix stemów (`0.45 bas + 0.30 inne + 0.25 bebny`), więc wyciszenie ścieżki
 odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena naprawdę cicha.
@@ -53,13 +53,15 @@ odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena n
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch. `onsetT/onsetS` z `stems.bebny.events.hits` (fallback `onsets`), `bassBeatT/S` (391 bitów basu), `bassOnsetT/S`, `oRmsP95`; `sampleAt` (interpolacja klatek), `EventCursor` (zdarzenia bez interpolacji) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
 | `ground.js` | ziemia: gładka baza FBM + kolejka **max 30 fal** (1 uderzenie = 1 fala, amp ≤ 0.22, 9 m/s, życie 2.6-6.0 s zależne od siły → zasięg 23-54 m, `sin(d·0.85)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), współśrodkowa (wspólna faza) nieregularność azymutalna; tłumienie radialne `exp(-r·0.010)` — pierścień dochodzi do krawędzi kadru, wygasanie od 72% życia; matowe oświetlenie, owalna sadzawka |
-| `core.js` | sfera-żar (r = 0.9, y = 0.3, wkopana), halo i PointLight. Kolor **stały** (`ENERGY 0.45`, `GAIN 0.50`, `HOT 0.50` w shaderze) — żadna ścieżka go nie zmienia. Wejścia: **„bas” → ciągła struktura powłoki**, **energia całości → rozmiar bazowy**, **uderzenie w „bebny” → puls rozmiaru**. Bez cząstek. Rozmiar: `(1 + 0.85·energy^1.15) · (1 + 0.26·pulse)` (puls: atak 22/s, zejście 9/s). Światło: stałe `2.4`, `distance 15 + scale·4`. Halo: stałe krycie `0.10`, barwa `(1.0, 0.72, 0.44)` |
+| `core.js` | sfera-żar (r = 0.9, y = 0.3, wkopana), halo i PointLight. Wejścia: **„bas” → ciągła struktura powłoki**, **energia całości → rozmiar bazowy i rozświetlenie barwy** (`uGlow`), **uderzenie w „bebny” → puls rozmiaru**. Rozmiar: `(1 + 0.85·energy^1.15) · (1 + 0.26·pulse)` (puls: atak 22/s, zejście 9/s). **Barwa**: `uGlow = smoothstep(0.20, 1.00, energy)` (atak 3/s, powrót 1.1/s), w shaderze `G = uGlow²` — cicho = głęboki bursztyn (`ENERGY 0.45`, `GAIN 0.50`, `HOT 0.50`, sufﬁt `0.78`), głośno = jasny kremowo-złoty żar (`hot → (1.0, 0.74, 0.34)`, `gain +0.16·G`, sufﬁt `0.78 + 0.10·G`); niska składowa niebieska trzyma halo złotym. Kwadrat `G` zostawia złoto w środku skali — inaczej cały refren byłby biały. Światło `2.4 + 1.3·glow`, halo krycie `0.10 + 0.08·glow`, barwa `(1.0, 0.72 + 0.15·glow, 0.44 + 0.22·glow)` |
 | `ribbon.js` | wstęga wokalu = **prosta, pozioma rzeka jedwabiu**: geometria sztywna, `HALF_X` = 1/3 szerokości kadru, `z = −28`, wyśrodkowana, **symetryczny taper 22%** długości (`width^0.7` + `alpha^2.2`). **Szerokość = głośność wokalu** (`rms_norm^0.8` → 0.16–4.6 m, damp 3.0), **falowanie = lokalne tempo** (jedna faza całkowana z `tempo_local_bpm`), **cisza = pasmo płaskie i skurczone do nici** (brama `pitch_voiced_prob` × energia, hold 0.9 s, release τ≈1.4 s), **kolor** = złoto jaśniejące od `pitch_midi` i `centroid_hz`. Kontur melodii w Y płytki, lead 80 ms. Zero tekstur i historii — cała zmienność w uniformach |
 | `ridge.js` | czysta matematyka grzbietu (bez `three`): `ridgeProfile` + tabela `RANGES` (4 pasma: near −95, mid −165, far −300, distant −470 m). Wydzielone, żeby sylwetkę policzyć w node: `node viz/scripts/crest_preview.mjs` |
 | `mountains.js` | panorama = **4 pasma**, grzbiet **wypalany na CPU przy starcie** do tekstury R32F (768 kolumn × 6 wierszy na pasmo) — vertex shader nie liczy szumu. **Głębia = perspektywa powietrzna** (każde pasmo jaśnieje ku kolorowi nieba, zero `FogExp2` na pasmach), cieniowanie zboczy z wygładzonego nachylenia (±40 kolumn), rim na grani, mgła u podstawy, miękka krawędź. **Statyczne — zero sterowania dźwiękiem** |
 | `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury, prędkość od tempa) + **320 statycznych gwiazd** na sferze R = 430, elewacja 8–37°, azimut ±65°, migotanie ±18%. Bez pyłu i bez bokeh-iskier |
 | `settings.js` | panel ścieżek: przycisk + lista stemów w lewym dolnym rogu; trzyma `gain[id] ∈ {0,1}` czytany w pętli i woła `onToggle` (main.js wycisza audio). Bez zależności od sceny, żeby dało się go testować osobno |
 | `postfx.js` | RenderPass → UnrealBloom (0.55 / 0.75 / próg 0.6) → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
+| `particles.js` | **pojedyncze iskry** po bokach kuli (`Sparks`): jedna drobina na **przekroczenie progu `peak` = 0.38** w „inne" (p95 tego utworu to 0.446 → ~9 zdarzeń na 20 s, jedno co ~2.2 s), detekcja zbocza + refrakcja 0.35 s, naprzemiennie lewa/prawa. Start na ziemi `|x| 4.8–8.4`, `z −6…2.5`, `y 0.22` (pas między kamerą a górami, tam gdzie idą fale). Lot: `vy 2.0–3.4` (wierzchołek 0.8–2.4 m), grawitacja `2.45`, opór `exp(−0.55·dt)`, kołysanie `sin` — iskra **spokojnie opada i gaśnie** (wjazd 0.14 s, wygaszanie kwadratowe od 45% życia, życie 2.6–3.6 s, rośnie o 45%). Pula 24, jeden draw call, additive, `depthWrite: false` |
+| `hud.js` | panel **H**: wszystkie **21 parametrów** ramkowych ścieżki „inne" (rms, rms_norm, rms_db, peak, zcr, centroid, bandwidth, rolloff, flatness, spectral_contrast ×7, dominant, mel_db ×32, mfcc ×13, chroma ×12, chroma_active, onset_strength, onset_norm, tempo, pitch_hz, pitch_midi, voiced_prob) jako słupki; skala z p98 przy starcie, próbkowanie liniowe, animacja wyłącznie na `transform` (zero reflow), liczby 4×/s |
 | `serve.py` | statyczny serwer na :8080 (root = repo) |
 
 Usunięte (martwe albo wyparte): `burst.js` (osobny system cząstek — teraz w `core.js`),
@@ -71,9 +73,9 @@ Usunięte (martwe albo wyparte): `burst.js` (osobny system cząstek — teraz w 
 |---|---|---|
 | `bebny.events.hits` (804, próg 0.02, dedupe 50 ms) | **ziemia** + **rozmiar sfery** | 1 uderzenie = 1 fala: `amp = 0.10 + 0.12·s`, `speed 9 m/s`, `life = 2.6 + 3.4·s`; ten sam atak daje `beatPulse = 0.50 + 0.50·s` (zanik 3/s), który w kuli idzie przez obwiednię `pulse` (atak 22/s, zejście 9/s) → `scale = base · (1 + 0.26·pulse)`, czyli do **+26% promienia** na uderzenie — puls wyraźnie widoczny, ale bez szarpnięć |
 | `bas.rms_norm` (w kuli: atak 3.2/s, zejście 1.8/s) | **struktura sfery — CIĄGŁA** | `smoothstep(0.30, 0.92)` → `uStruct`. Przemieszczenie **wyłącznie radialne** (`r = R + disp·uWobble`), pole to suma dwóch szumów o średniej 0, bez wyróżnionego kierunku — dlatego kula zawsze zostaje kulą. `uWobble = 0.014 + 0.034·bassG` (max ~4.8% promienia), częstotliwość `1.15 → 2.0`, tempo falowania `t·(0.14 + 0.30·uStruct)`. Ten sam `disp` trafia do fragmentu jako `vDisp` i moduluje **jasność** (`relief = 1 + vDisp·0.52·uStruct`): garby łapią światło, doliny ciemnieją. **Zero impulsów na bit** — faktura oddycha razem z obecnością basu |
-| `bas.events.beats` (391, ~2/s) | **nieużywane przez scenę** | wcześniej każdy bit dawał `uBeat` (żebro + przyspieszenie falowania) — usunięte, bo czytało się jako „uderzenia” zmieniające fakturę. Struktura jest teraz wyłącznie ciągła. **Kolor kuli jest stały — bas go nie dotyka** |
-| `energy − dropEnv` (`dropEnv` = energia damp τ 2.5 s) | **tylko diagnostyka** | warunki: skok > 0.20 **i** `energy > 0.55` **i** `dropEnv < 0.42`, edge + cooldown 1.4 s → wpis w `dropLog`/`__viz`. Struktury nie szarpie (jest ciągła), koloru nie dotyka (jest stały). W Blinding Lights odpala raz, t ≈ 118.5 s |
-| `energy` (0.45·bas + 0.30·inne + 0.25·bebny peak, /p95) | **rozmiar sfery** + ziemia + obraz | `scale = 1 + 0.85·energy^1.15` (wygładzane 6/s) → cisza ≈ 1.2, najmocniejsze momenty ≈ 1.85 (kula rośnie o ~55% średnicy); `uCoreGlow` ziemi, jasność światła kuli, ekspozycja `1.05 + 0.3·energy` |
+| `bas.events.beats` (391, ~2/s) | **nieużywane przez scenę** | wcześniej każdy bit dawał `uBeat` (żebro + przyspieszenie falowania) — usunięte, bo czytało się jako „uderzenia” zmieniające fakturę. Struktura jest teraz wyłącznie ciągła. Kolor kuli idzie za `energy` (a ta zawiera bas), nie za pojedynczym bitem |
+| `energy − dropEnv` (`dropEnv` = energia damp τ 2.5 s) | **tylko diagnostyka** | warunki: skok > 0.20 **i** `energy > 0.55` **i** `dropEnv < 0.42`, edge + cooldown 1.4 s → wpis w `dropLog`/`__viz`. Struktury nie szarpie (jest ciągła), koloru nie dotyka bezpośrednio (idzie on za `energy`). W Blinding Lights odpala raz, t ≈ 118.5 s |
+| `energy` (0.45·bas + 0.30·inne + 0.25·bebny peak, /p95) | **rozmiar i kolor sfery** + ziemia + obraz | `scale = 1 + 0.85·energy^1.15` (wygładzane 6/s) → cisza ≈ 1.2, najmocniejsze momenty ≈ 1.85 (kula rośnie o ~55% średnicy); `uCoreGlow` ziemi, jasność światła kuli, ekspozycja `1.05 + 0.3·energy` |
 | `wokal.rms_norm` | **wstęga** | szerokość 0.16–4.6 m + jasność, damp 3.0 |
 | `wokal.pitch_midi` (ffill, brama voiced) | wstęga | kontur Y (±1.3 m), damp 5.0 / 12.0 (barwa) |
 | `wokal.pitch_voiced_prob` × `wokal.rms_norm` | wstęga | brama frazy: hold 0.9 s, release τ≈1.4 s → cisza = cienka nić bez falowania |
@@ -85,6 +87,21 @@ Usunięte (martwe albo wyparte): `burst.js` (osobny system cząstek — teraz w 
 Zasady: wartości ciągłe — interpolacja klatek + `damp` (wykładnicze, niezależne od fps);
 beaty/onsety — triggery bez interpolacji. Wszystkie czasy w shaderach to czas utworu
 (pauza = stop efektów). Efekty nigdy nie czytają zegara ściennego.
+
+### Zegar po przewinięciu (restart)
+
+`el.currentTime = 0` w HTMLAudioElement jest **asynchroniczne**: element jeszcze przez
+kilka–kilkanaście klatek raportuje starą pozycję (zmierzone: 31.48 s po restarcie).
+Zegar czytający to bezpośrednio wystrzeliwał w przyszłość → kursor zdarzeń przeskakiwał
+na koniec listy, a `lastWaveT` lądował przed nami — czyli **zero fal do końca utworu**.
+Dlatego:
+
+- `beginSeek(t)` po każdym przewinięciu (restart, wznowienie) — `currentTime()` stoi na
+  celu, dopóki element go nie potwierdzi (`|Δ| < 0.30 s`, bezpiecznik 500 ms);
+- `resetCursors(t)` zeruje też debounce fal (`lastWaveT = t - 2`);
+- w pętli siatka bezpieczeństwa: cofnięcie zegara o > 0.25 s → `resetCursors` + `ground.reset()`;
+- wszystkie resety warstw przez `safeReset()` — brak metody nie przerywa już restartu
+  (objaw ze starego cache: `TypeError: ground.reset is not a function`; leczy Ctrl+F5).
 
 ## Dane: uderzenia bębnów
 

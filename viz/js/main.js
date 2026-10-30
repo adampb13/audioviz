@@ -10,9 +10,10 @@ import { CoreSphere } from "./core.js";
 import { VocalRibbon } from "./ribbon.js";
 import { Mountains } from "./mountains.js";
 import { Atmosphere } from "./atmosphere.js";
-import { SideParticles } from "./particles.js";
 import { createPost } from "./postfx.js";
 import { createSettings } from "./settings.js";
+import { createInneHud } from "./hud.js";
+import { Sparks } from "./particles.js";
 
 const params = new URLSearchParams(location.search);
 const TRACK = params.get("track") || "blindinglights";
@@ -87,15 +88,17 @@ mountains.resize(window.innerWidth / window.innerHeight);
 const atmosphere = new Atmosphere();
 atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
-// cząstki boczne — tylko na ewidentne duże piki „inne”
-const particles = new SideParticles();
-scene.add(particles.points);
+// Pojedyncze iskry po bokach kuli: jedna drobina na przekroczenie progu `peak`
+// ścieżki „inne" (próg w pętli), naprzemiennie lewa/prawa, na ziemi tam, gdzie
+// rozchodzą się fale. Nie chmura, nie fontanna — rzadki akcent (particles.js).
+const sparks = new Sparks();
+scene.add(sparks.points);
 
 const post = createPost(renderer, scene, camera);
 
 // Sonda QA (?debug): dostęp do obiektów sceny dla zrzutów, pomiarów i bisectowania
 if (params.has("debug")) {
-  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere, particles };
+  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere, sparks };
 }
 
 // po utracie kontekstu render-targety trzeba zbudować od nowa
@@ -147,11 +150,28 @@ const onsets = new EventCursor(track.onsetT, track.onsetS);
 let lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
-  lastBurst = t - 2; // po przewinięciu nie strzelamy fajerwerkiem od razu
-  S.innePeakT = t - 2;
+  lastBurst = t - 2;    // po przewinięciu nie strzelamy fajerwerkiem od razu
+  lastWaveT = t - 2;    // …i nie blokujemy pierwszej fali debounce'em z przyszłości
+  lastSpark = t - 2;    // …i nie sypiemy iskrami za akcent, który już minął
+  oPeakPrev = 0;
 }
 
-// „od początku”: audio, zegar demo, kursory zdarzeń, fale na ziemi i cząstki.
+// Odporny reset warstwy sceny. Bez tego pojedynczy brak metody (np. stary
+// moduł z cache przeglądarki: „ground.reset is not a function") przerywał
+// restart w połowie — audio wracało do 0, a kursory i fale zostawały w tyle.
+function safeReset(obj, name) {
+  const fn = obj && obj[name];
+  if (typeof fn !== "function") {
+    console.warn(`[audioviz] brak ${name}() na warstwie sceny — pomijam. Twarde odświeżenie: Ctrl+F5.`);
+    return false;
+  }
+  try { fn.call(obj); return true; } catch (e) {
+    console.warn(`[audioviz] ${name}() rzucił wyjątek:`, e);
+    return false;
+  }
+}
+
+// „od początku”: audio, zegar demo, kursory zdarzeń, fale na ziemi.
 // Stan odtwarzania zostaje — jeśli grało, gra dalej, tylko od 0 s.
 function restartTrack() {
   const els = STEM_FILES.map((n) => audio[n]).filter(Boolean);
@@ -160,9 +180,10 @@ function restartTrack() {
   }
   demoT = 0;
   pausedAt = null;
+  beginSeek(0);         // seek jest asynchroniczny — patrz currentTime()
   resetCursors(0);
-  ground.reset();
-  particles.reset();
+  safeReset(ground, "reset");
+  safeReset(sparks, "reset");
   if (playing) for (const el of els) el.play().catch(() => {});
   if (window.__viz) window.__viz.t = 0;
 }
@@ -172,10 +193,15 @@ const S = {
   vRms: 0, vProb: 0, vMidi: 60, vCent: 0,
   bRms: 0, bCent: 0,
   dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120,
-  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
-  innePeakT: -10, inneBursts: 0, // ewidentne piki „inne” -> cząstki boczne
+  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0, sparksFired: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
+// Iskry po bokach kuli: próg `peak` ścieżki „inne" i dedupe. p95 tego utworu
+// to 0.446, więc 0.38 łapie mocne akcenty, ale nie każdy szum (~9 na 20 s,
+// jedno co ~2.2 s — wciąż pojedyncze drobiny, nie fontanna).
+const SPARK_PEAK = 0.38;
+let lastSpark = -10;  // czas ostatniej iskry (refrakcja 0.35 s)
+let oPeakPrev = 0;    // poprzednia próbka peak — detekcja ZBOCZA, nie poziomu
 if (window.__dbg) window.__dbg.S = S;
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
 const fpsHist = new Float32Array(240);
@@ -185,8 +211,13 @@ let fpsI = 0, fpsN = 0;
 const btn = document.getElementById("start");
 const overlay = document.getElementById("overlay");
 const hud = document.getElementById("hud");
+// panel H: wszystkie 21 parametrów ścieżki „inne" jako słupki (hud.js)
+const hudPanel = createInneHud(track);
+hud.textContent = "";
+hud.appendChild(hudPanel.el);
 // informacje domyślnie schowane — klawisz H pokazuje/ukrywa podgląd stanu
 hud.classList.add("off");
+let hudOn = false; // panel H domyślnie schowany; słupki liczymy tylko gdy widać
 let playing = false;
 let demoMode = params.has("demo");
 let demoT = parseFloat(params.get("t") || "0") || 0;
@@ -195,17 +226,37 @@ let demoT = parseFloat(params.get("t") || "0") || 0;
 // scena skakała (fale znikają, wstęga się resetuje).
 let pausedAt = null;
 
+// Przewinięcie elementu audio jest ASYNCHRONICZNE: po `el.currentTime = 0`
+// element jeszcze przez kilka/kilkanaście klatek raportuje STARĄ pozycję
+// (zmierzone: 31.48 s przez ~10 klatek po restarcie). Zegar czytający to
+// bezpośrednio wystrzeliwał w przyszłość, kursor zdarzeń przeskakiwał na koniec
+// listy, a lastWaveT lądował przed nami — czyli po restarcie ZERO fal i cisza
+// w scenie do końca utworu. Dlatego po każdym seeku zegar stoi na celu,
+// dopóki element go nie potwierdzi (z bezpiecznikiem 500 ms).
+let seekT = null;   // cel przewijania
+let seekUntil = 0;  // bezpiecznik w ms — gdyby element nigdy nie potwierdził
+
+function beginSeek(t) {
+  seekT = t;
+  seekUntil = performance.now() + 500;
+}
+
 function currentTime() {
   const m = masterAudio();
   if (!m) return demoT;
-  if (playing) return m.currentTime;
-  return pausedAt !== null ? pausedAt : demoT;
+  if (!playing) return pausedAt !== null ? pausedAt : demoT;
+  if (seekT !== null) {
+    if (Math.abs(m.currentTime - seekT) < 0.30 || performance.now() > seekUntil) seekT = null;
+    else return seekT; // zegar stoi — scena nie widzi skoku w przyszłość
+  }
+  return m.currentTime;
 }
 
 async function setPlaying(p) {
   const els = STEM_FILES.map((n) => audio[n]).filter(Boolean);
   if (p) {
     const t0 = currentTime();
+    beginSeek(t0); // ten sam problem: po przewinięciu element chwilę kłamie o pozycji
     for (const el of els) el.currentTime = t0;
     try {
       await Promise.all(els.map((el) => el.play()));
@@ -235,14 +286,14 @@ window.addEventListener("keydown", (e) => {
   // zasłona overlay włączała się i wyłączała kilkanaście razy na sekundę)
   if (e.repeat) return;
   if (e.code === "Space") { e.preventDefault(); setPlaying(!playing); }
-  else if (e.code === "KeyH") { hud.classList.toggle("off"); }
+  else if (e.code === "KeyH") { hudOn = !hudOn; hud.classList.toggle("off", !hudOn); }
 });
 if (demoMode) overlay.classList.add("hidden");
 resetCursors(demoT);
 
 // ---------- pętla ----------
 const clock = new THREE.Clock();
-let hudTimer = 0, fps = 60;
+let hudTimer = 0, fps = 60, prevT = 0;
 window.__viz = {};
 
 renderer.info.autoReset = false; // ręczny reset — info liczy CAŁĄ klatkę (scena+passy)
@@ -252,6 +303,18 @@ function frame() {
   fps = fps * 0.95 + (dt > 0 ? 1 / dt : 60) * 0.05;
   if (demoMode) demoT += dt; // demo bez audio: własny zegar, ten sam kod próbkowania
   const t = currentTime();
+  // Siatka bezpieczeństwa: zegar cofnięty (seek w tył zrobiony gdzie indziej,
+  // restart elementu przez przeglądarkę) = kursory i fale wracają do teraźniejszości.
+  // Bez tego kursor stałby na końcu listy, a lastWaveT blokował fale do końca utworu.
+  // Warunek seekT === null: podczas własnego przewijania zegar celowo stoi na celu
+  // (0 s), więc to nie jest „cofnięcie" i nie wolno tu kasować blokady seeka.
+  if (seekT === null && t < prevT - 0.25) {
+    resetCursors(t);
+    safeReset(ground, "reset");
+  safeReset(sparks, "reset");
+  }
+  prevT = t;
+  if (hudOn) hudPanel.bars(t); // panel H: słupki 60 fps, tylko gdy widoczny
 
   // próbki surowe (interpolacja między klatkami) -> stan tłumiony (damp)
   // Gain ścieżek z panelu: 0 = wyciszona, jej sygnał nie wchodzi do animacji.
@@ -264,6 +327,7 @@ function frame() {
   const bCentRaw = sampleAt(track.bCent, track.fps, t);
   const dRmsRaw = sampleAt(track.dRms, track.fps, t);
   const oRmsRaw = sampleAt(track.oRms, track.fps, t);
+  const oPeakRaw = sampleAt(track.oPeak, track.fps, t);
   const oCentRaw = sampleAt(track.oCent, track.fps, t);
   const tempoT = sampleAt(track.tempo, track.fps, t); // nie jest ścieżką — zawsze aktywny
   const energyRaw = sampleAt(track.energy, track.fps, t);
@@ -320,8 +384,24 @@ function frame() {
     S.beatPulse = Math.max(S.beatPulse, 0.50 + sn * 0.50); // sfera pulsuje raz, na ten sam atak
   });
 
+  // POJEDYNCZE ISKRY: jedna drobina na każde PRZEKROCZENIE progu `peak` w „inne",
+  // naprzemiennie lewa/prawa. Detekcja zbocza (nie „jestem powyżej progu"), więc
+  // jeden głośny fragment daje jedną iskrę, a nie serię co klatkę.
+  if (g.inne) {
+    if (oPeakPrev < SPARK_PEAK && oPeakRaw >= SPARK_PEAK && t - lastSpark > 0.35) {
+      lastSpark = t;
+      const st = clamp((oPeakRaw - SPARK_PEAK) / Math.max(0.02, 0.62 - SPARK_PEAK), 0, 1);
+      sparks.spawn(0.35 + 0.65 * st);
+      S.sparksFired++;
+    }
+    oPeakPrev = oPeakRaw;
+  } else {
+    oPeakPrev = 0; // wyciszone „inne" = zero iskier
+  }
+
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
+  sparks.update(dt);
   // Struktura kuli reaguje na bas CIĄGLE (obwiednia S.bRms w core.update) —
   // żadnych impulsów na pojedynczy bit.
   // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).
@@ -337,18 +417,7 @@ function frame() {
     if (S.dropLog.length > 12) S.dropLog.shift();
   }
 
-  // EWIDENTNE duże piki „inne” → wybuch cząstek po lewej i prawej stronie sceny.
-  // Detekcja: atak głośności ponad wolną obwiednię (τ 1.7 s, ta sama co wcześniej
-  // do jasności) + próg głośności + refrakcja 1.2 s. Progi zmierzone na pełnym
-  // utworze (dokładnie te filtry: damp 7.7/s i 1.7/s): ~30 zdarzeń na 203 s,
-  // czyli 1-4 na 20 s — wyraźny akcent, a nie ciągły dym.
-  const oAtk = S.oRms - S.oSlow;
-  if (g.inne && S.oRms > 0.30 && oAtk > 0.11 && t - S.innePeakT > 1.2) {
-    S.innePeakT = t;
-    S.inneBursts++;
-    particles.burst(clamp(oAtk / 0.25, 0.35, 1));
-  }
-  particles.update(dt);
+  // (cząstki boczne usunięte — patrz komentarz przy systemach sceny)
 
   // kolor sfery jest stały — żadna ścieżka go nie zmienia
   core.update(t, dt, S.energy, S.beatPulse, S.bRms);
@@ -381,24 +450,23 @@ function frame() {
     const fpsP95 = Math.round(sorted[Math.floor((fpsN - 1) * 0.05)] || 0); // dolne 5%
     const calls = renderer.info.render.calls;
     const tris = renderer.info.render.triangles;
-    hud.textContent =
-      `t ${t.toFixed(2)}  sec ${sec + 1}/${track.sections.length}  ` +
-      `vR ${S.vRms.toFixed(2)} vP ${S.vProb.toFixed(2)} midi ${S.vMidi.toFixed(1)}  ` +
-      `bR ${S.bRms.toFixed(2)} en ${S.energy.toFixed(2)} bp ${S.beatPulse.toFixed(2)}  ` +
-      `sz ${core.scale.toFixed(2)} pl ${core.pulse.toFixed(2)} st ${core.uniforms.uStruct.value.toFixed(2)}  ` +
-      `waves ${S.wavesFired}  blysk ${S.bursts}  p95 ${fpsP95}fps  dc ${calls}`;
+    hudPanel.text(t, {
+      section: sec, sections: track.sections.length,
+      fps, waves: S.wavesFired, muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]).join(" "),
+    });
     window.__viz = {
       t, section: sec, sections: track.sections.length,
       vRms: S.vRms, vProb: S.vProb, vMidi: S.vMidi, vCent: S.vCent,
       bRms: S.bRms, dRms: S.dRms, oRms: S.oRms,
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
-      innePeaks: S.inneBursts, particlesAlive: particles.alive,
       otherHits: S.otherHits,
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
-      core: { pulse: core.pulse, scale: core.scale,
+      core: { pulse: core.pulse, scale: core.scale, glow: core.glow,
         uStruct: core.uniforms.uStruct.value, uWobble: core.uniforms.uWobble.value },
+      sparks: { alive: sparks.alive, spawned: sparks.spawned, fired: S.sparksFired,
+        peak: +oPeakPrev.toFixed(3) },
       ctxLost, track: TRACK,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
     };

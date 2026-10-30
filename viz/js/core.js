@@ -1,9 +1,9 @@
 // System 2: SFERA-SERCE — ciepły żar wpół zagłębiony w ziemi.
 //
 // Cztery niezależne wejścia, każde z innej ścieżki:
-//   • „inne" -> KOLOR i JASNOŚĆ. Każdy onset przesuwa barwę (bursztyn -> szampańskie
-//     złoto) i podbija jasność; między onsetami kula jest przygaszonym żarem.
-//     Mocne, głośne dźwięki rozbłyskują kulę DO BIAŁY na ~0.15 s (uWhite).
+//   • energia + głośność całości -> KOLOR i JASNOŚĆ. Cicha muzyka = głębokie,
+//     matowe złoto; głośna = rozświetlona, kremowa barwa (uGlow 0..1). Ta sama
+//     energia steruje rozmiarem, więc kula rośnie i rozjaśnia się razem z utworem.
 //   • „bas"  -> STRUKTURA. Poniżej ~0.50 basu kula jest gładka, powyżej 0.85
 //     falowanie jest najgłębsze (jedno ciągłe pole, bez impulsów na bit).
 //     Bas zmienia tylko amplitudę i tempo falowania — nigdy kierunek, więc nie
@@ -77,26 +77,36 @@ void main() {
 const FRAG = /* glsl */ `
 precision highp float;
 ${NOISE_GLSL}
-// Kolor kuli jest STAŁY — ścieżka „inne" nie ma z nim nic wspólnego.
+// Kolor kuli podąża za energią/głośnością CAŁEGO utworu (uGlow 0..1).
+// uGlow = 0 odtwarza dawny, stały wygląd (złoty żar) — więc cicha muzyka
+// nie robi się jaśniejsza niż wcześniej, tylko głośna idzie w stronę kremu.
 const float ENERGY = 0.45;  // poziom żaru: ciemny bursztyn -> jasne złoto
 const float GAIN = 0.50;    // jasność bazowa
 const float HOT = 0.50;     // temperatura górnego końca (bursztyn <-> krem)
 uniform float uTime;
+uniform float uGlow;   // 0..1 — energia całości: złoto -> rozświetlona
 uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
 varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
 varying vec3 vObj;
 varying vec3 vN;
 varying vec3 vWorld;
 void main() {
+  // G = uGlow^2: środek skali zostaje złoty, a rozświetla się dopiero góra
+  // zakresu — inaczej cały refren (energia ~0.75) byłby biały.
+  float G = uGlow * uGlow;
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vWorld);
   float fres = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 2.0);
 
-  vec3 deep = vec3(0.34, 0.10, 0.0);                                  // ciemny bursztyn
+  vec3 deep = mix(vec3(0.34, 0.10, 0.0), vec3(0.44, 0.18, 0.03), G); // ciemny bursztyn
   // górny koniec zostaje POMARAŃCZOWY, nie kremowy: przy bloom+ACES krem
   // odbarwia się do bieli i wtedy akcent koloru na bit przestaje być widoczny
   vec3 hot = mix(vec3(1.0, 0.52, 0.16), vec3(1.0, 0.66, 0.32), HOT * 0.45);
-  vec3 base = mix(deep, hot, ENERGY);
+  // głośno -> górny koniec idzie w stronę kremu, ale ZOSTAJE ZŁOTY:
+  // pełne rozświetlenie (uGlow = 1) to jasny, ciepły żar, nie biała kula —
+  // biel odbiera scenie jej bursztynowy charakter (i tak dodaje ją bloom).
+  hot = mix(hot, vec3(1.0, 0.74, 0.34), G * 0.45); // niska niebieska = halo zostaje złote
+  vec3 base = mix(deep, hot, min(1.0, ENERGY + 0.10 * G));
 
   // STRUKTURA BASU = falowanie powłoki: modulujemy JASNOŚĆ (nie geometrię),
   // więc kula zawsze zostaje kulą — bez wklęsnięć i płaskich ścian.
@@ -105,9 +115,10 @@ void main() {
   // a nie jak plamy na kuli.
   float relief = 1.0 + vDisp * (0.52 * uStruct);
   relief = clamp(relief, 0.65, 1.40);
-  vec3 col = base * (0.72 + fres * 0.85) * GAIN * relief;
+  // głośno: mocniejszy brzeg (rozświetlona obwódka) i wyższy gain
+  vec3 col = base * (0.72 + fres * (0.85 + 0.30 * G)) * (GAIN + 0.16 * G) * relief;
   // miękki sufit: żar trzyma się PONIŻEJ odbarwienia — ACES nie myje go do bieli
-  const float cap = 0.78;
+  float cap = 0.78 + 0.10 * G;
   col = cap * tanh(col / cap);
   gl_FragColor = vec4(col, 1.0);
 }
@@ -143,6 +154,7 @@ export class CoreSphere {
       uTime: { value: 0 },
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
+      uGlow: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
@@ -174,10 +186,11 @@ export class CoreSphere {
     this.bass = 0;  // CIĄGŁA, wygładzona obecność basu (struktura)
     this.pulse = 0; // puls od uderzenia w bębny (rozmiar, szybki ale gładki)
     this.scale = 1; // wygładzony rozmiar bazowy (z energii całości)
+    this.glow = 0;  // 0..1 — rozświetlenie barwy (ta sama energia całości)
   }
 
-  // energySmooth: energia całości (rozmiar); beatPulse: puls bębnów (rozmiar);
-  // bassEnv: obecność basu (struktura). Kolor kuli nie zależy od żadnej ścieżki.
+  // energySmooth: energia całości (rozmiar I rozświetlenie barwy);
+  // beatPulse: puls bębnów (rozmiar); bassEnv: obecność basu (struktura).
   update(t, dt, energySmooth, beatPulse, bassEnv) {
     // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia jest wygładzona
     // dwustronnie (atak 3.2/s, puszczenie 1.8/s), więc faktura „oddycha"
@@ -194,6 +207,17 @@ export class CoreSphere {
     // „pompuje”, a nie stoi napompowana.
     const kp = beatPulse > this.pulse ? 22.0 : 9.0;
     this.pulse += (beatPulse - this.pulse) * (1 - Math.exp(-dt * kp));
+
+    // ROZŚWIETLENIE BARWY — ten sam sygnał co rozmiar (energia/głośność całości),
+    // ale inna obwiednia: kolor zmienia się WOLNIEJ niż rozmiar (atak 3.0/s,
+    // powrót 1.1/s), więc kula „nabiera światła" przez kilka sekund refrenu,
+    // a nie miga na każdy akcent. Poniżej 0.18 energii kolor jest dokładnie
+    // taki jak dawniej (uGlow = 0) — cisza nie rozjaśnia kuli.
+    const gq = Math.min(1, Math.max(0, (en - 0.20) / (1.00 - 0.20)));
+    const glowT = gq * gq * (3 - 2 * gq);
+    const kg = glowT > this.glow ? 3.0 : 1.1;
+    this.glow += (glowT - this.glow) * (1 - Math.exp(-dt * kg));
+    this.uniforms.uGlow.value = this.glow;
     const scalePulse = this.scale * (1 + BEAT_GROW * this.pulse);
 
     this.uniforms.uTime.value = t;
@@ -210,9 +234,10 @@ export class CoreSphere {
     this.mesh.scale.setScalar(scalePulse);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,
     // nie zalewać sceny (audit: „nie oświetlać jakoś bardzo sceny do góry")
-    this.light.intensity = 2.4;
+    this.light.intensity = 2.4 + 1.3 * this.glow;
     this.light.distance = 15 + this.scale * 4;
-    this.haloMat.opacity = 0.10;
-    this.haloMat.color.setRGB(1.0, 0.72, 0.44); // stała ciepła poświata
+    // halo idzie za rozświetleniem: jaśniejsze i bliżej kremu, ale nadal dyskretne
+    this.haloMat.opacity = 0.10 + 0.08 * this.glow;
+    this.haloMat.color.setRGB(1.0, 0.72 + 0.15 * this.glow, 0.44 + 0.22 * this.glow);
   }
 }

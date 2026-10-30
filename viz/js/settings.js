@@ -4,14 +4,14 @@
 // więc każdą interakcję „ścieżka → obiekt" można testować osobno.
 //
 // Wejście: onToggle(id, on) — main.js wycisza tam audio; onRestart() — odtwarza
-// utwór od 0 s (zegar, kursory zdarzeń, fale, cząstki). Wyjście: { gain, ... }
+// utwór od 0 s (zegar, kursory zdarzeń, fale). Wyjście: { gain, ... }
 // gdzie gain[id] ∈ {0,1} czyta pętla klatek.
 
 export const STEMS = [
   { id: "wokal", label: "wokal", hint: "wstęga" },
   { id: "bas", label: "bas", hint: "struktura" },
   { id: "bebny", label: "bebny", hint: "fale · puls" },
-  { id: "inne", label: "inne", hint: "piki · cząstki" },
+  { id: "inne", label: "inne", hint: "widmo · jasność" },
 ];
 
 const GEAR =
@@ -53,6 +53,8 @@ export function createSettings(onToggle = () => {}, onRestart = () => {}) {
     panel.classList.toggle("open", v);
     btn.classList.toggle("open", v);
     btn.setAttribute("aria-expanded", String(v));
+    // panel H (parametry „inne") odsuwa się w prawo, żeby nie wchodzić pod listę ścieżek
+    document.body.classList.toggle("panel-open", v);
   };
   let isOpen = false;
   const togglePanel = (v = !isOpen) => { isOpen = v; open(v); };

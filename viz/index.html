@@ -18,9 +18,45 @@
     border-radius: 999px; border: 1px solid #d9984a; background: transparent; color: #ffcf8a;
     cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(217,152,74,.25); }
   button:hover { background: rgba(217,152,74,.12); }
-  #hud { position: fixed; left: 46px; bottom: 10px; z-index: 1; white-space: pre;
-    font: 12px/1.45 ui-monospace, Consolas, monospace; opacity: .55; color: #d9984a; }
-  #hud.off { display: none; }
+  /* ---------- panel H: wszystkie parametry „inne" jako słupki ---------- */
+  #hud { position: fixed; left: 46px; bottom: 44px; z-index: 1; width: 318px;
+    box-sizing: border-box; padding: 9px 11px 10px; border-radius: 13px;
+    background: rgba(9,5,2,.55); backdrop-filter: blur(11px) saturate(125%);
+    -webkit-backdrop-filter: blur(11px) saturate(125%);
+    border: 1px solid rgba(217,152,74,.13);
+    box-shadow: 0 16px 46px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,207,138,.045);
+    font: 10px/1.35 ui-monospace, Consolas, monospace; color: rgba(236,223,200,.7);
+    opacity: .94; transition: opacity .22s ease, transform .22s ease, left .22s ease; }
+  #hud.off { opacity: 0; transform: translateY(6px); pointer-events: none; }
+  /* lista ścieżek otwarta: panel H odsuwa się w prawo, nie zasłania się nawzajem */
+  body.panel-open #hud { left: 238px; }
+  #hud .hd { display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    font-size: 8.5px; letter-spacing: .13em; text-transform: uppercase;
+    color: rgba(255,207,138,.5); padding-bottom: 6px; margin-bottom: 6px;
+    border-bottom: 1px solid rgba(217,152,74,.11); }
+  #hud .hd span:last-child { letter-spacing: .06em; color: rgba(255,207,138,.34); }
+  #hud .grp { margin: 0 0 5px; }
+  #hud .grp:last-child { margin-bottom: 0; }
+  #hud .gt { font-size: 7.5px; letter-spacing: .22em; text-transform: uppercase;
+    color: rgba(217,152,74,.44); margin: 0 0 3px 1px; }
+  #hud .row { display: flex; align-items: center; gap: 7px; height: 12px; }
+  #hud .row.vec { height: 20px; }
+  #hud .lb { flex: none; width: 78px; color: rgba(236,223,200,.52); font-size: 9.5px;
+    letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #hud .bar { position: relative; flex: 1 1 auto; height: 3px; border-radius: 2px;
+    background: rgba(217,152,74,.09); overflow: hidden; }
+  #hud .bar > i { position: absolute; inset: 0; border-radius: 2px;
+    transform: scaleX(0); transform-origin: 0 50%;
+    background: linear-gradient(90deg, rgba(217,152,74,.8), rgba(255,214,150,.95));
+    box-shadow: 0 0 7px rgba(255,207,138,.3); will-change: transform; }
+  #hud .vl { flex: none; width: 58px; font-size: 9.5px; text-align: right; color: rgba(255,207,138,.62);
+    font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+  #hud .strip { flex: 1 1 auto; display: flex; align-items: flex-end; gap: 1px;
+    height: 16px; }
+  #hud .strip > i { flex: 1 1 0; min-width: 0; height: 100%; border-radius: 1px;
+    transform: scaleY(0); transform-origin: 50% 100%;
+    background: linear-gradient(180deg, rgba(255,214,150,.85), rgba(217,152,74,.45));
+    will-change: transform; }
   #err { color: #f88; max-width: 80vw; text-align: center; white-space: pre-wrap; }
 
   /* ---------- panel ścieżek: dyskretny, wtopiony w dolny lewy róg ---------- */

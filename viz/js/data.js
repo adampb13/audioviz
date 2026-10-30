@@ -118,6 +118,9 @@ export class Track {
     this.oRmsP95 = percentile(o.rms_norm, 95) || 1; // do normalizacji głośności „inne"
     this.oCent = toF32(o.centroid_hz);
     this.oCentP95 = percentile(o.centroid_hz, 95) || 1;
+    // szczyt „inne" — z niego odpalają się pojedyncze iskry po bokach kuli
+    this.oPeak = toF32(o.peak);
+    this.oPeakP95 = percentile(o.peak, 95) || 1;
     this.tempo = toF32(o.tempo_local_bpm || w.tempo_local_bpm, 120);
 
     // Zdarzenia: beaty (bębny + bas) i uderzenia bębnów z siłą znormalizowaną p95.
@@ -148,6 +151,62 @@ export class Track {
     this.bassBeatT = toF32(S.bas.events.beats || []);
     this.bassBeatS = new Float32Array(this.bassBeatT.length).fill(1);
     [this.otherOnsetT, this.otherOnsetS] = onsety(S.inne);
+
+    // ---- WSZYSTKIE parametry ramkowe ścieżki „inne" (panel H) ----
+    // Packowane frame-major: data[i*k + j], gdzie i = ramka, j = pasmo.
+    // Wektorowe pola w JSON są pasmowo (mel_db: 32 × n_frames), skalary: n_frames.
+    // Skala słupka (lo..hi) liczona RAZ przy starcie z p98 wartości bezwzględnej —
+    // jeden głośny moment nie ściska całej skali, a inny utwór działa bez zmian.
+    const packScalar = (field) => toF32(o[field] || []);
+    const packBands = (field) => {
+      const bands = o[field] || [];
+      const k = bands.length || 1;
+      const out = new Float32Array(this.n * k);
+      for (let j = 0; j < k; j++) {
+        const b = bands[j] || [];
+        for (let i = 0; i < this.n && i < b.length; i++) {
+          out[i * k + j] = Number.isFinite(b[i]) ? b[i] : 0;
+        }
+      }
+      return out;
+    };
+    const p98abs = (data) => {
+      const a = new Float32Array(data.length);
+      for (let i = 0; i < data.length; i++) a[i] = Math.abs(data[i]);
+      return percentile(a, 98) || 1;
+    };
+    // range = [lo, hi] gdy skala jest umowna (dB, Hz, midi); brak = 0..p98
+    const P = (id, data, range = null, dec = 3) => ({
+      id, label: id, // etykieta w panelu H = nazwa pola z JSON
+      k: data.length / this.n,
+      data,
+      lo: range ? range[0] : 0,
+      hi: range ? range[1] : p98abs(data),
+      dec,
+    });
+    this.inneParams = [
+      P("rms", packScalar("rms"), [0, 0.25]),
+      P("rms_norm", packScalar("rms_norm"), [0, 1]),
+      P("rms_db", packScalar("rms_db"), [-60, 0], 1),
+      P("peak", packScalar("peak"), [0, 0.6]),
+      P("zcr", packScalar("zcr"), [0, 0.35]),
+      P("centroid_hz", packScalar("centroid_hz"), [0, this.oCentP95], 0),
+      P("bandwidth_hz", packScalar("bandwidth_hz"), null, 0),
+      P("rolloff_hz", packScalar("rolloff_hz"), null, 0),
+      P("flatness", packScalar("flatness"), [0, 0.19]),
+      P("spectral_contrast", packBands("spectral_contrast"), null, 1),
+      P("dominant_hz", packScalar("dominant_hz"), null, 0),
+      P("mel_db", packBands("mel_db"), [-60, 22], 1),
+      P("mfcc", packBands("mfcc"), null, 1),
+      P("chroma", packBands("chroma"), [0, 1], 2),
+      P("chroma_active", packScalar("chroma_active"), [0, 12], 0),
+      P("onset_strength", packScalar("onset_strength"), null, 2),
+      P("onset_norm", packScalar("onset_norm"), [0, 1]),
+      P("tempo_local_bpm", packScalar("tempo_local_bpm"), [60, 180], 1),
+      P("pitch_hz", forwardFill(o.pitch_hz || []), [0, 1000], 0), // null = bez tonu
+      P("pitch_midi", forwardFill(o.pitch_midi || []), [36, 84], 1),
+      P("pitch_voiced_prob", packScalar("pitch_voiced_prob"), [0, 1]),
+    ];
 
     // Sekcje z wokalu (najlepiej oddaje strukturę zwrotka/refren)
     this.sections = S.wokal.events.sections.map(([s, e]) => ({ start: s, end: e }));

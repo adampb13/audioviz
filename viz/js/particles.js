@@ -1,21 +1,27 @@
-// System cząstek bocznych: dwa emitery przy lewej i prawej krawędzi kadru.
-// Odpalają się WYŁĄCZNIE na ewidentne, duże piki ścieżki „inne" (detekcja w main.js:
-// atak głośności ponad wolną obwiednię + refrakcja 1.2 s) — czyli rzadko, kilka razy
-// na 20 s. Cząstki unoszą się powoli i gasną; zero zależności od FPS (dt-owane).
+// POJEDYNCZE ISKRY po bokach kuli — nie chmura, nie fontanna, jedna drobina.
+//
+// Zasada: iskra pojawia się WYŁĄCZNIE w chwili przekroczenia progu `peak`
+// w ścieżce „inne" (próg w main.js, 0.38; p95 tego utworu to 0.446, więc łapie
+// mocne akcenty — ~9 zdarzeń na 20 s, jedno co ~2.2 s). Na jedno
+// przekroczenie wypada JEDNA iskra, naprzemiennie po lewej i prawej stronie kuli,
+// na ziemi tam, gdzie rozchodzą się fale (między kamerą a górami).
+//
+// Ruch: wyrzut w górę z grawitacją, powolny dryf na zewnątrz i delikatne
+// kołysanie; życie 2.6-3.6 s, wygaszanie w ostatnich 55% — iskra „spokojnie
+// opada i gaśnie", nigdy nie strzela i nie znika skokiem.
+//
+// Zero zależności od FPS: wszystko dt-owane, pula stała (MAX), jeden draw call.
 import * as THREE from "three";
 import { PAL } from "./glsl.js";
 
-const MAX = 900;           // pula na oba emitery
-const PER_SIDE = 44;       // cząstek na emiter w jednym wybuchu
-const LIFE = [2.6, 4.6];   // życie (s)
-const SIZE = [0.7, 2.4];   // rozmiar bazowy (px przy 1 m)
+const MAX = 24;              // pula na obie strony — więcej nie jest potrzebne
+const LIFE = [2.6, 3.6];     // życie (s)
+const SIZE = [1.05, 1.75];   // rozmiar bazowy (m) — pojedyncza drobina, nie plama
+const GRAV = 2.45;           // m/s² — opada wolniej niż spada kamień, „spokojnie"
 
-// Emitery: x = ±13.5 m na z ≈ 3 m, czyli tuż przy bocznych krawędziach kadru
-// (przy fov 55 i kamerze z = 22 połowa szerokości kadru na tej głębokości ≈ 18 m).
-const EMITTERS = [
-  { x: -13.5, dir: -1 },
-  { x: 13.5, dir: 1 },
-];
+// Miejsce startu: ziemia po bokach kuli, w pasie między kamerą a górami
+// (góry stoją na z = -95/-175/-320, więc kadr „pod górami" to z ≈ -5..2).
+const SPOT = { x: [4.8, 8.4], z: [-6.0, 2.5], y: 0.22 };
 
 const VERT = /* glsl */ `
 attribute float aSize;
@@ -27,24 +33,30 @@ void main() {
   vA = aAlpha;
   vT = aTint;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_PointSize = aSize * (300.0 / max(0.001, -mv.z));
+  gl_PointSize = aSize * (430.0 / max(0.001, -mv.z));
   gl_Position = projectionMatrix * mv;
 }
 `;
 
 const FRAG = /* glsl */ `
 precision highp float;
-uniform vec3 uWarm, uCool;
+uniform vec3 uGold, uCream;
 varying float vA;
 varying float vT;
 void main() {
-  float d = 1.0 - smoothstep(0.08, 0.5, length(gl_PointCoord - 0.5));
-  if (d * vA < 0.004) discard;
-  gl_FragColor = vec4(mix(uWarm, uCool, vT), d * vA);
+  // miękkie, okrągłe ziarno: halo + gorący środek (dwa różne temperatury)
+  float r = length(gl_PointCoord - 0.5) * 2.0;
+  if (r > 1.0) discard;
+  float soft = pow(1.0 - r, 2.2);
+  float hot = pow(1.0 - r, 7.0);
+  vec3 col = mix(uGold, uCream, hot * 0.85);
+  float a = (soft * 0.75 + hot * 0.55) * vA;
+  if (a < 0.004) discard;
+  gl_FragColor = vec4(col * a, a); // additive: alpha w kolorze, reszta i tak sumuje
 }
 `;
 
-export class SideParticles {
+export class Sparks {
   constructor() {
     this.pos = new Float32Array(MAX * 3);
     this.vel = new Float32Array(MAX * 3);
@@ -54,9 +66,11 @@ export class SideParticles {
     this.age = new Float32Array(MAX);
     this.life = new Float32Array(MAX);
     this.size0 = new Float32Array(MAX);
+    this.phase = new Float32Array(MAX); // faza kołysania
     this.next = 0;
     this.alive = 0;
-    this.bursts = 0;
+    this.spawned = 0;
+    this.side = -1; // następna iskra: lewa (-1) czy prawa (+1)
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
@@ -65,50 +79,51 @@ export class SideParticles {
     geo.setAttribute("aTint", new THREE.BufferAttribute(this.tint, 1));
     geo.setDrawRange(0, MAX);
 
-    this.uniforms = {
-      uWarm: { value: new THREE.Color(PAL.gold) },
-      uCool: { value: new THREE.Color(PAL.cream) },
-    };
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
-      uniforms: this.uniforms,
+      uniforms: {
+        uGold: { value: new THREE.Color(PAL.goldBright) },
+        uCream: { value: new THREE.Color(PAL.cream) },
+      },
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
     this.points = new THREE.Points(geo, mat);
-    this.points.frustumCulled = false;
+    this.points.frustumCulled = false; // drobiny latają poza bryłą — nie licz AABB
     this.points.renderOrder = 6;
     this.geo = geo;
   }
 
-  // strength 0..1 — siła piku „inne” (z ataku głośności)
-  burst(strength = 1) {
+  // strength 0..1 — jak mocno `peak` przekroczył próg (wpływa na wielkość i lot)
+  spawn(strength = 0.5) {
     const s = Math.min(1, Math.max(0, strength));
-    this.bursts++;
-    for (const em of EMITTERS) {
-      const n = Math.round(PER_SIDE * (0.5 + 0.5 * s));
-      for (let k = 0; k < n; k++) {
-        const i = this.next;
-        this.next = (this.next + 1) % MAX;
-        const i3 = i * 3;
-        this.pos[i3] = em.x + em.dir * (Math.random() * 1.8);
-        this.pos[i3 + 1] = 0.35 + Math.random() * 1.6;
-        this.pos[i3 + 2] = 2 + Math.random() * 4;
-        // unoszenie + lekki rozjazd na zewnątrz kadru
-        this.vel[i3] = em.dir * (0.5 + Math.random() * 1.9) + (Math.random() - 0.5) * 0.6;
-        this.vel[i3 + 1] = (1.1 + Math.random() * 2.4) * (0.7 + 0.5 * s);
-        this.vel[i3 + 2] = (Math.random() - 0.5) * 1.2;
-        const life = LIFE[0] + Math.random() * (LIFE[1] - LIFE[0]);
-        this.age[i] = 0;
-        this.life[i] = life;
-        this.size0[i] = (SIZE[0] + Math.random() * (SIZE[1] - SIZE[0])) * (0.75 + 0.45 * s);
-        this.size[i] = this.size0[i];
-        this.tint[i] = Math.random();
-        this.alpha[i] = 0;
-      }
-    }
+    const i = this.next;
+    this.next = (this.next + 1) % MAX;
+    const i3 = i * 3;
+
+    const side = this.side;
+    this.side = -this.side; // naprzemiennie: lewa, prawa, lewa…
+
+    this.pos[i3] = side * (SPOT.x[0] + Math.random() * (SPOT.x[1] - SPOT.x[0]));
+    this.pos[i3 + 1] = SPOT.y;
+    this.pos[i3 + 2] = SPOT.z[0] + Math.random() * (SPOT.z[1] - SPOT.z[0]);
+
+    // wyrzut w górę + lekki dryf NA ZEWNĄTRZ (od kuli), żeby iskra „uciekała" w bok
+    this.vel[i3] = side * (0.10 + Math.random() * 0.28);
+    this.vel[i3 + 1] = 2.00 + Math.random() * 0.90 + s * 0.50; // wierzchołek 0.8-2.4 m
+    this.vel[i3 + 2] = (Math.random() - 0.5) * 0.22;
+
+    const life = LIFE[0] + Math.random() * (LIFE[1] - LIFE[0]) + s * 0.5;
+    this.age[i] = 0;
+    this.life[i] = life;
+    this.size0[i] = (SIZE[0] + Math.random() * (SIZE[1] - SIZE[0])) * (0.85 + 0.35 * s);
+    this.size[i] = this.size0[i];
+    this.tint[i] = Math.random();
+    this.alpha[i] = 0;
+    this.phase[i] = Math.random() * Math.PI * 2;
+    this.spawned++;
   }
 
   reset() {
@@ -119,12 +134,13 @@ export class SideParticles {
     this.life.fill(0);
     this.next = 0;
     this.alive = 0;
+    this.side = -1;
     this.geo.attributes.position.needsUpdate = true;
     this.geo.attributes.aAlpha.needsUpdate = true;
+    this.geo.attributes.aSize.needsUpdate = true;
   }
 
   update(dt) {
-    const damp = Math.exp(-dt * 0.55); // opór: ruch spowalnia, nic nie „wyskakuje”
     let alive = 0;
     for (let i = 0; i < MAX; i++) {
       if (this.life[i] <= 0) continue;
@@ -133,21 +149,33 @@ export class SideParticles {
       if (u >= 1) {
         this.life[i] = 0;
         this.alpha[i] = 0;
+        this.size[i] = 0;
         continue;
       }
       alive++;
       const i3 = i * 3;
-      this.vel[i3] *= damp;
-      this.vel[i3 + 1] *= damp;
-      this.vel[i3 + 2] *= damp;
-      this.pos[i3] += this.vel[i3] * dt;
+
+      // grawitacja + opór powietrza: lot robi się coraz wolniejszy i miękki
+      this.vel[i3 + 1] -= GRAV * dt;
+      const drag = Math.exp(-dt * 0.55);
+      this.vel[i3] *= drag;
+      this.vel[i3 + 2] *= drag;
+
+      // kołysanie: drobina nie leci po sznurku, tylko dryfuje na boki
+      const sway = Math.sin(this.phase[i] + this.age[i] * 1.9) * 0.22 * dt;
+      this.pos[i3] += (this.vel[i3] + sway) * dt;
       this.pos[i3 + 1] += this.vel[i3 + 1] * dt;
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt;
-      // wejście 0.18 s, wyjście w ostatnich 55% życia
-      const fadeIn = Math.min(1, this.age[i] / 0.18);
+      if (this.pos[i3 + 1] < SPOT.y) { // nie zapada się pod ziemię
+        this.pos[i3 + 1] = SPOT.y;
+        this.vel[i3 + 1] *= -0.18; // miękkie odbicie — i tak zaraz gaśnie
+      }
+
+      // wejście 0.14 s, potem powolne wygaszanie od 45% życia (kwadratowo = bez „klifu")
+      const fadeIn = Math.min(1, this.age[i] / 0.14);
       const fadeOut = 1 - Math.max(0, (u - 0.45) / 0.55);
-      this.alpha[i] = fadeIn * fadeOut * fadeOut * 0.55;
-      this.size[i] = this.size0[i] * (1 + u * 0.55); // drobina rośnie i blednieje
+      this.alpha[i] = fadeIn * fadeOut * fadeOut * 1.0;
+      this.size[i] = this.size0[i] * (1 + u * 0.45); // drobina rośnie i blednieje
     }
     this.alive = alive;
     this.geo.attributes.position.needsUpdate = true;
