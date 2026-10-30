@@ -2,8 +2,12 @@
 
 Kinowa, audio-reaktywna scena Three.js (WebGL2, custom GLSL): złoty, mglisty pustynny sen
 napędzany plikiem `data/<utwór>/analysis.json`. Estetyka wg obrazu referencyjnego
-(master prompt) — ciemna czekoladowa ziemia, koncentryczne fale światła od beatów,
-żarząca sfera-serce, jedwabna wstęga wokalu, sylwetki gór w mgle, złote cząsteczki i iskry.
+(master prompt) — ciemna czekoladowa ziemia, koncentryczne fale światła od uderzeń bębnów,
+żarząca sfera-serce, jedwabna wstęga wokalu, cztery pasma gór w mgle, gwiazdy.
+
+Zasada nadrzędna: **mniej znaczy lepiej** — cisza + trzy elementy (ziemia, wstęga, sfera).
+W scenie nie ma cząstek tła (pył, bokeh, iskry): jedyne drobiny wypuszcza sama sfera —
+kilka na każdy bit basu i fajerwerk na drop.
 
 ## Uruchomienie
 
@@ -13,49 +17,54 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
 ```
 
 - `?track=<nazwa>` — utwór = katalog w `data/` (domyślnie `blindinglights`).
-  Wymaga `data/<nazwa>/analysis.json` + stemów `wokal/bas/bebny/inne.wav`.
-  Nowy utwór: `python analyze_stems.py <katalog>` (patrz `analyze_stems.py`).
+  Wymaga `data/<nazwa>/analysis.json` + stemów `wokal/bas/bebny/inne.wav`
+  (wav-y są poza repo — odtwarzalne przez `separate.py` + `analyze_stems.py`).
 - `?demo&t=123` — start bez gestu użytkownika, od 123 s (zegar własny, bez audio).
-- `Spacja` — pauza · `H` — panel HUD · `#err` — błędy JS · `window.__viz` — sonda stanu.
+- `Spacja` — pauza · `H` — panel HUD · `#err` — błędy JS · `window.__viz` — sonda stanu
+  (`t, energy, dropEnv, dropLog, bursts, fpsP95, calls, tris, ribbon…`).
 
 ## Architektura (`viz/js/`)
 
 | plik | rola |
 |---|---|
-| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **1 fala + 1 puls sfery na KAŻDYM uderzeniu w stem "bebny"** (`events.hits`, próg 0.02, dedupe 50 ms; amplituda i życie fali rosną z siłą 0.10-0.22 / 2.6-6.0 s); iskierki błyskają na każdym uderzeniu; `otherBeats` (beaty „inne”) → błysk sfery, `bassOnsets` → cząsteczki |
-| `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch; `onsetT/onsetS` z `stems.bebny.events.hits` (fallback `onsets`); `otherBeatT/otherBeatS` (beaty „inne” z siłą z najbliższego onsetu), `bassOnsetT/bassOnsetS` (onsety basu /p95); `sampleAt` (interpolacja klatek), `EventCursor` (beaty/onsety) |
+| `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **1 fala + 1 puls sfery na KAŻDYM uderzeniu w stem „bebny”** (`events.hits`, próg 0.02, dedupe 50 ms), **błysk sfery na KAŻDYM onsiecie „inne”**, **cząstki na KAŻDYM bicie „bas”**, **fajerwerk na drop**; ekspozycja, HUD, `__viz` |
+| `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch. `onsetT/onsetS` z `stems.bebny.events.hits` (fallback `onsets`), `otherOnsetT/S` (756 onsetów „inne”, /p95), `bassBeatT/S` (391 bitów basu), `bassOnsetT/S`, `oRmsP95`; `sampleAt` (interpolacja klatek), `EventCursor` (zdarzenia bez interpolacji) |
 | `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
 | `ground.js` | ziemia: gładka baza FBM + kolejka **max 30 fal** (1 uderzenie = 1 fala, amp ≤ 0.22, 9 m/s, życie 2.6-6.0 s zależne od siły → zasięg 23-54 m, `sin(d·0.85)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), współśrodkowa (wspólna faza) nieregularność azymutalna; tłumienie radialne `exp(-r·0.010)` — pierścień dochodzi do krawędzi kadru, wygasanie od 72% życia; matowe oświetlenie, owalna sadzawka |
-| `core.js` | sfera-żar (r=0.9, y=0.3 wkopana). **Rozmiar = energia utworu**: skala 1.0 (cisza) → 1.95 (kulminacja), bo `push = energy^1.45` — wzrost jest wyraźny dopiero w najgłośniejszym fragmencie, a nie o 25% przez cały utwór. **Błysk koloru = beaty instrumentów ze stemu „inne”** (`inne.events.beats`, siła z najbliższego onsetu ±90 ms, zanik τ≈140 ms): wędrujący pas przesuwa barwę złoto → jasne złoto, a nie dopala jasności. **Mocny bas = zmiana struktury**: `bassGate = smoothstep(0.48, 0.74, bs.rms)` (wygładzone asymetrycznie 6/s atak, 1.8/s zejście) dodaje w vertex shaderze płaty `snoise` i żebra ±0.22 promienia — gładka kula zmienia się w bryłę z wybrzuszeniami i wraca. Emissive 0.5+0.85·en+0.22·bp (cap 0.95, tanh-sufit 0.95), bursztyn #7a3000→głębszy złoty (hot #ffb861: ACES odbarwia jasne barwy, więc podstawa musi być głębsza); halo sprite ze skalą `3.2/√skala`; PointLight 6+10·en+9·push |
-| `ribbon.js` | wstęga wokalu = **prosta, pozioma rzeka jedwabiu rozpięta przez cały kadr**: geometria sztywna `x −45..+45` na `z=−28` (od prawej krawędzi ekranu do lewej, końce tuż za kadrem), **symetryczny taper** 12% długości z każdej strony (`width^0.7` + `alpha^2.2`) — pasmo zweża się i gaśnie zamiast być ucięte licem przy krawędzi. **Szerokość = głośność wokalu**: `rms_norm^0.8` mapowane 0.16 m (nić) → 6.6 m (masywny pas), wygładzone damp 3.0 (τ≈330 ms), więc bez pionowych „trąbek” na wejściu słowa. **Falowanie = lokalne tempo**: cała wstęga ma JEDNĄ fazę, całkowaną z `tempo_local_bpm` (0.30 rad/s przy 85 BPM → 1.9 rad/s przy ~180) — szybkie słowa marszczą pasmo, przeciągnięta nuta je prostuje; bo to całka, a nie `t × speed`, zmiana BPM zmienia tempo fal, a nie fazę (zero skoków). **Cisza = pasmo płaskie i skurczone**: brama frazy liczy `pitch_voiced_prob` **i energię** (pyin deklaruje `voiced` także przy `rms_norm<0.02` — 74 takie ramki w tym utworze), po 0.9 s hold + release τ≈1.4 s amplituda falowania spada do 0, a szerokość do 0.16 m — zostaje cienka złota nić, bez drgania. **Kolor**: złoto `#d9984a`; wysoka nuta (`pitch_midi>64`, mediana utworu 64.8) i piskliwa barwa (`centroid_hz`, mediana 2718 Hz) rozjaśniają wstęgę w stronę jasnego złota `#ffcf8a` z kremowymi prześwitami na włóknach (`#fff3d6`), nigdy w stronę zimnej bieli. Kontur melodii w Y płytki (±1.3 m). 320×8 segmentów, 3 warstwy additive, `depthWrite:false`; zero tekstur i zero bufora historii — cała zmienność płynie w uniformach |
-| `mountains.js` | panorama = **5 pasm na z=−95/−135/−190/−270/−380**; grzbiet **wypalany na CPU przy starcie** (`ridgeProfile`: masyw λ~1 km ⊗ ridged fbm z domain warpem, 3-6 oktaw), więc vertex shader nie liczy ani jednego szumu (statyczna geometria, 768 kolumn × 6 wierszy na pasmo). **Głębia = perspektywa powietrzna**: każde pasmo miesza się ku jasnemu kolorowi nieba przy horyzoncie (mgła 6%→76%) i **jaśnieje** z odległością, zamiast ciemnieć (wcześniej 3 pasma były ciemniejsze + dobijała je `FogExp2` 0.009 → po 260 m 99.6% czerni, cała panorama była jedną plamą). Dodatkowo: gradient pionowy (ciemno u stóp → jaśniej przy grani), cieniowanie zboczy z **wygładzonego** nachylenia (okno ±40 kolumn — bez tego każda kolumna dostawała własny odcień i pasma czytały się jak pionowe prążki kurtyny), rim na krawędzi grzbietu, mgła u podstawy (doliny w oparach) i miękka krawędź (5%→32%) — dalekie granie wchodzą w niebo gradientem, nie nożem. `freq` odwrotnie proporcjonalne do odległości, żeby w każdym paśmie szczyty wypadały co ~60-90 px |
-| `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury), **gwiazdy: 320 statycznych punktów na sferze R=430, elewacja 8-37°** (dokładnie ta część nieba, którą widzi kamera i której nie zasłaniają góry; azimut ±65° od osi patrzenia), rozmiar 1.1-3.5 CSS px (`uScale` = pixelRatio, więc stały fizycznie), jasność 0.14-0.76, migotanie ±18% przy 0.016-0.056 Hz; pozycje **statyczne**, `depthTest` normalny → góry je zasłaniają; **bez sterowania dźwiękiem**. 8 hero bokeh od onsetów bębnów. Pył (250 drobin nisko nad ziemią) **usunięty** — jego rolę przejęły cząsteczki wypuszczane z rdzenia (`burst.js`) |
-| `burst.js` | cząsteczki z rdzenia — **jedyny system drobin przy ziemi**: 260 w pierścieniowym poolu, emitowane **wyłącznie na mocnych uderzeniach basu** (`bas.events.onsets` ≥ 0.42 p95 → ~80 uderzeń na utwór, 5-14 drobin na uderzenie). Żyją w tym samym niskim paśmie co stary pył: start r 0.7-1.5 m od rdzenia na y 0.22-0.72, wyrzut na boki 1.4-5.2 m (× energia) z hamowaniem `1-exp(-2.2k)` + unoszenie 0.3 m/s, życie 1.5-3.1 s. **Zero pracy na CPU w klatce**: pozycja, rozmiar (perspektywiczny, rośnie z wiekiem jak bokeh) i zanik liczone w vertex shaderze z `(t0, p0, przesunięcie, życie, siła, rozmiar)`; CPU zapisuje atrybuty tylko przy emisji (~10 kB). Additive, `depthWrite:false`, `renderOrder:6` |
-| `postfx.js` | RenderPass → UnrealBloom → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
+| `core.js` | sfera-żar (r = 0.9, y = 0.3, wkopana) **+ własna pula cząstek (460, jedno `Points`), halo i PointLight**. Trzy niezależne wejścia: **„inne” → jasność/kolor**, **„bas” → struktura**, **drop → fajerwerk** (dokładne liczby w tabeli niżej). Rozmiar: `1 + beatPulse·0.12 + energy·0.25`. Światło: `1.2 + glow·2.8`, `distance 15`. Halo: krycie `0.06 + glow·0.07` |
+| `ribbon.js` | wstęga wokalu = **prosta, pozioma rzeka jedwabiu**: geometria sztywna, `HALF_X` = 1/3 szerokości kadru, `z = −28`, wyśrodkowana, **symetryczny taper 22%** długości (`width^0.7` + `alpha^2.2`). **Szerokość = głośność wokalu** (`rms_norm^0.8` → 0.16–4.6 m, damp 3.0), **falowanie = lokalne tempo** (jedna faza całkowana z `tempo_local_bpm`), **cisza = pasmo płaskie i skurczone do nici** (brama `pitch_voiced_prob` × energia, hold 0.9 s, release τ≈1.4 s), **kolor** = złoto jaśniejące od `pitch_midi` i `centroid_hz`. Kontur melodii w Y płytki, lead 80 ms. Zero tekstur i historii — cała zmienność w uniformach |
+| `ridge.js` | czysta matematyka grzbietu (bez `three`): `ridgeProfile` + tabela `RANGES` (4 pasma: near −95, mid −165, far −300, distant −470 m). Wydzielone, żeby sylwetkę policzyć w node: `node viz/scripts/crest_preview.mjs` |
+| `mountains.js` | panorama = **4 pasma**, grzbiet **wypalany na CPU przy starcie** do tekstury R32F (768 kolumn × 6 wierszy na pasmo) — vertex shader nie liczy szumu. **Głębia = perspektywa powietrzna** (każde pasmo jaśnieje ku kolorowi nieba, zero `FogExp2` na pasmach), cieniowanie zboczy z wygładzonego nachylenia (±40 kolumn), rim na grani, mgła u podstawy, miękka krawędź. **Statyczne — zero sterowania dźwiękiem** |
+| `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury, prędkość od tempa) + **320 statycznych gwiazd** na sferze R = 430, elewacja 8–37°, azimut ±65°, migotanie ±18%. Bez pyłu i bez bokeh-iskier |
+| `postfx.js` | RenderPass → UnrealBloom (0.55 / 0.75 / próg 0.6) → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
+| `serve.py` | statyczny serwer na :8080 (root = repo) |
+
+Usunięte (martwe albo wyparte): `burst.js` (osobny system cząstek — teraz w `core.js`),
+`basscore.js`, `fog.js`, `rings.js`.
 
 ## Mapowanie danych → efekt
 
-| dane (stemy po polsku) | efekt |
-|---|---|
-| `bebny.events.beats`, `bas.events.beats` | impuls: fala na ziemi (1 bit = 1 fala, debounce 350 ms) + krótki puls sfery (`beatPulse`) |
-| `inne.events.beats` (+ najbliższy onset ±90 ms jako siła) | **błysk koloru sfery** (`otherFlash`, zanik τ≈140 ms) — rytm instrumentów, nie stroboskop z 756 onsetów |
-| `bas.events.onsets` ≥ 0.42·p95 (~80 na utwór) | **cząsteczki z rdzenia** (`burst.emit`, 5-14 drobin, niskie pasmo przy ziemi) |
-| `bas.rms_norm` | `bassGate` (smoothstep 0.48-0.74, atak 6/s, zejście 1.8/s) → **struktura sfery** (płaty ±0.22 r) |
-| `bebny.events.onsets` (siła p95) | zapalenie kolejnej iskry-bokeh |
-| `bas.rms_norm` | (przez `cross.energy`) energia → **skala sfery 1.0-1.95 (`energy^1.45`)**, jasność, światło |
-| `wokal.pitch_midi` (ffill) | kontur Y wstęgi |
-| `wokal.pitch_voiced_prob` | **voiced gate + brama frazy**: szerokość i widoczność wstęgi (nić ↔ pasmo); 0.9 s podtrzymania po dźwięcznej ramce |
-| `wokal.rms_norm` | jasność/grubość wstęgi, marszczenie sfery |
-| `*.centroid_hz` (p95) | barwa wstęgi/sfery (bursztyn ↔ krem) |
-| `inne.tempo_local_bpm` | prędkość chmur na kopule |
-| `cross.energy` | `energySmooth` (wolna, λ=2) → jasność sfery, światło na ziemi, exposure |
-| `bas.peak` (p95) | amplituda fali: 0.15 + peak·0.2 (max 0.35) |
-| `wokal.events.sections` | HUD (numer sekcji) |
+| dane (stemy po polsku) | obiekt | dokładne mapowanie |
+|---|---|---|
+| `bebny.events.hits` (804, próg 0.02, dedupe 50 ms) | **ziemia** + rozmiar sfery | 1 uderzenie = 1 fala: `amp = 0.10 + 0.12·s`, `speed 9 m/s`, `life = 2.6 + 3.4·s`; ten sam atak daje `beatPulse` (`0.10 + 0.90·s`, zanik 3/s) → `scale = 1 + bp·0.12 + en·0.25` |
+| `inne.events.onsets` (756; próg tylko 0.02, dedupe 40 ms) | **jasność sfery** | każdy onset: `flash = max(flash, 0.20 + 0.80·s)`, zanik `exp(−dt·7)` — klawisze i nagłe dźwięki mają mrugnąć |
+| `inne.rms_norm` / `oRmsP95` | **kolor/jasność sfery** | `glow ← 0.95·oRmsN + 0.55·flash` (atak 7/s, zejście 3/s) → `uEnergy = 0.05 + 0.80·glow`, `uGain = 0.30 + 0.60·glow` |
+| `inne.centroid_hz` / p95 | **barwa sfery** | `uHot` — bursztyn → jaśniejszy krem (nigdy czysta biel) |
+| `bas.rms_norm` (atak 9/s, zejście 2.4/s) | **struktura sfery** | bramka `smoothstep(0.55, 0.90)` → `uStruct`: gęstszy szum (2.5→7.0) + drugi przebieg `0.22·bassG`; `uWobble = 0.015 + 0.28·bassG`. Poniżej 0.55 basu kula jest idealnie gładka |
+| `bas.events.beats` (391, ~2/s) | **cząstki z kuli** | 6–13 cząstek na bit (pomijane tylko gdy `bRms < 0.12`), życie 0.8–1.5 s, rozmiar 0.42–0.84 |
+| `energy − dropEnv` (`dropEnv` = energia damp τ 2.5 s) | **fajerwerk (drop)** | warunki: skok > 0.20 **i** `energy > 0.55` **i** `dropEnv < 0.42`, edge + cooldown 1.4 s → `dropBurst(q)`: 3–5 stożkowych ognisk, ~60–90 cząstek, prędkość 4.0–6.8 m/s, życie 1.2–2.1 s, rozmiar ×1.3–1.6. W Blinding Lights odpala raz, t ≈ 118.5 s |
+| `energy` (0.45·bas + 0.30·inne + 0.25·bebny peak, /p95) | sfera + ziemia + obraz | `uCoreGlow` ziemi, jasność światła kuli, ekspozycja `1.05 + 0.3·energy` |
+| `wokal.rms_norm` | **wstęga** | szerokość 0.16–4.6 m + jasność, damp 3.0 |
+| `wokal.pitch_midi` (ffill, brama voiced) | wstęga | kontur Y (±1.3 m), damp 5.0 / 12.0 (barwa) |
+| `wokal.pitch_voiced_prob` × `wokal.rms_norm` | wstęga | brama frazy: hold 0.9 s, release τ≈1.4 s → cisza = cienka nić bez falowania |
+| `wokal.centroid_hz` / p95 | wstęga | złoto `#d9984a` → jasne złoto `#ffcf8a` przy wysokich/piskliwych dźwiękach |
+| `tempo_local_bpm` | wstęga + niebo | faza falowania (całkowana) i prędkość chmur `uTime·bpm/120` |
+| `wokal.events.sections` | HUD | numer sekcji `sec n/8` |
+| czas utworu | kamera, gwiazdy | dryf kamery (`sin(t·0.1)·0.8`, y 7±0.4), migotanie gwiazd |
 
-Zasady: wartości ciągłe — interpolacja klatek + wygładzanie wykładnicze
-(α=0.12 RMS, α=0.08 pitch @60 fps → `damp` z λ=7.7 / 5.0; wokal: atak 17.3,
-release 4.4). Beaty/onsety — triggery, bez interpolacji. Wszystkie czasy
-w shaderach to czas utworu (pauza = stop efektów).
+Zasady: wartości ciągłe — interpolacja klatek + `damp` (wykładnicze, niezależne od fps);
+beaty/onsety — triggery bez interpolacji. Wszystkie czasy w shaderach to czas utworu
+(pauza = stop efektów). Efekty nigdy nie czytają zegara ściennego.
 
 ## Dane: uderzenia bębnów
 
@@ -76,12 +85,16 @@ zasięgiem 23-54 m — pierścień gaśnie dopiero przy krawędzi kadru).
 
 ## Pętla weryfikacyjna
 
-Przed „gotowe": `node --check viz/js/*.js`; przejazd po sekcjach w `?demo&t=`,
-kadr na sekcję + `#err` pusty + `window.__viz`; PIL: profil jasności wierszami,
-paleta 8 kolorów vs. referencja. Progi akceptacji (audyt): **clip% < 1%**
-(piksele >250), **drawCalls < 25** (sama scena, bez passów bloom),
-**tris < 800k**, **FPS p95 > 55**. Aktualnie: clip 0.00%, ~19 draw calls sceny
-(33-34 z passami), 286k tris, p95 ~140 fps. Czas klatki wstęgi (taper + tekstura historii): p50 6.9 ms, p99 9-12 ms, przy 3200×1800 (2560×1440 @DPR 1.25) 143 fps — 2 klatki >16.7 ms na 12 s.
+Przed „gotowe”: `node --check viz/js/*.js` **oraz** `grep -n '^<<<<<<<\|^>>>>>>>' viz/js/*.js`
+(marker konfliktu wewnątrz literału GLSL przechodzi `node --check` i psuje tylko shader);
+przejazd po sekcjach w `?demo&t=`, kadr na sekcję, `#err` pusty, `window.__viz`.
+Po edycji modułu ES: `cdp('Network.setCacheDisabled', cacheDisabled=True)` — inaczej
+przeglądarka podaje starą wersję i wygląda to jak zepsuty patch.
+
+Progi akceptacji (audyt): **clip% < 1%** (piksele > 250), **drawCalls < 25** (sama scena,
+bez passów bloom), **tris < 800k**, **FPS p95 > 55**. Aktualnie (2560×1440 @DPR 1.25):
+123–135 fps p95, 27 draw calli, 267k tris, `#err` pusty.
+
 Referencja: `C:\Users\adamp\Downloads\Gemini_Generated_Image_q3xo6hq3xo6hq3xo.jpg`.
 
 ## Odporność obrazu (artefakty)
