@@ -65,7 +65,13 @@ ETA_PATH = DATA / ".eta.json"
 # separate: próg ≈ czas ładowania sieci (≈50 s), potem ≈2.2 s pracy na sekundę
 # materiału — tak wychodzi z przebiegów htdemucs na tym CPU po odliczeniu krótkich
 # klipów, w których cały koszt to padding do segmentu 7.8 s.
-ETA_DEFAULTS = {"separate": (50.0, 2.2), "analyze": (2.5, 0.28), "hits": (2.0, 0.02)}
+# ETA per sprzęt: separator na GPU jest ~6× szybszy (12 s materiału: 13 s vs 82 s),
+# więc jeden zestaw stałych dla obu przypadków zawsze kłamał w którąś stronę.
+# `separate` na GPU ≈ 6 s narzutu (ładowanie sieci) + 0.62 s na sekundę materiału.
+ETA_DEFAULTS = {
+    "gpu": {"separate": (6.0, 0.62), "analyze": (2.5, 0.28), "hits": (2.0, 0.02)},
+    "cpu": {"separate": (50.0, 2.2), "analyze": (2.5, 0.28), "hits": (2.0, 0.02)},
+}
 ETA_MIN_SAMPLES = 3
 ETA_LOCK = threading.Lock()
 _DUR_CACHE: dict[str, float] = {}
@@ -103,6 +109,22 @@ def audio_duration(slug: str) -> float:
     return dur
 
 
+_DEVICE: str | None = None
+
+
+def _device() -> str:
+    """„gpu" tylko gdy torch ma build CUDA — inaczej separator liczy na CPU."""
+    global _DEVICE
+    if _DEVICE is None:
+        try:
+            import torch
+
+            _DEVICE = "gpu" if torch.cuda.is_available() else "cpu"
+        except Exception:  # noqa: BLE001 — brak torch to po prostu CPU
+            _DEVICE = "cpu"
+    return _DEVICE
+
+
 def _eta_model() -> dict:
     try:
         raw = json.loads(ETA_PATH.read_text(encoding="utf-8"))
@@ -137,8 +159,10 @@ def _eta_fit(samples: list) -> tuple[float, float]:
 
 
 def eta_seconds(step: str, duration: float, model: dict | None = None) -> float:
-    a, b = ETA_DEFAULTS.get(step, (2.0, 0.2))
-    samples = (model if model is not None else _eta_model()).get(step) or []
+    dev = _device()
+    a, b = ETA_DEFAULTS[dev].get(step, (2.0, 0.2))
+    # klucz z urządzeniem: pomiary z CPU nie mogą psuć ETA na GPU (i odwrotnie)
+    samples = (model if model is not None else _eta_model()).get(f"{step}@{dev}") or []
     try:
         a, b = _eta_fit(samples)
     except (ValueError, TypeError):
@@ -162,9 +186,10 @@ def record_eta(step: str, duration: float, elapsed: float) -> None:
     """Zapisz pomiar, żeby kolejne ETA było liczone z rzeczywistości, nie z sufitu."""
     with ETA_LOCK:
         model = _eta_model()
-        arr = list(model.get(step) or [])
+        key = f"{step}@{_device()}"
+        arr = list(model.get(key) or [])
         arr.append([round(float(duration), 2), round(float(elapsed), 2)])
-        model[step] = arr[-8:]
+        model[key] = arr[-8:]
         try:
             DATA.mkdir(parents=True, exist_ok=True)
             ETA_PATH.write_text(json.dumps(model, indent=1), encoding="utf-8")
@@ -892,4 +917,7 @@ def run(port: int = 8080) -> None:
 
 
 if __name__ == "__main__":
+    # `import torch` (dla detekcji GPU) trwa ~3 s — robimy to w tle, żeby pierwsze
+    # żądanie ETA nie czekało na import.
+    threading.Thread(target=_device, daemon=True).start()
     run(int(sys.argv[1]) if len(sys.argv) > 1 else 8080)

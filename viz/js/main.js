@@ -100,8 +100,8 @@ const atmosphere = new Atmosphere();
 atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
 // Ścieżka „inne" ma JEDEN obraz, zbudowany z RYTMU (zdarzeń), nie z głośności:
-//   • kręgi uderzeń (rhythm.js) — każde uderzenie rozchodzi się po piasku
-//     kręgiem światła; siła daje zasięg, rejestr widma — barwę. Patrząc na
+//   • cząsteczki rytmu (rhythm.js) — iskra na akcent rozsypana po całej scenie,
+//     opada i gaśnie; siła daje jasność, rejestr widma — barwę. Patrząc na
 //     piasek widzisz sekwencję uderzeń, a nie głośność utworu.
 const wheel = new RhythmWheel();
 scene.add(wheel.group);
@@ -489,7 +489,7 @@ function frame() {
 
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
-  wheel.update(t, dt, !!g.inne, S.tempo);
+  wheel.update(t, dt, !!g.inne, S.tempo, camera);
   // Struktura kuli reaguje na bas CIĄGLE (obwiednia S.bRms w core.update) —
   // żadnych impulsów na pojedynczy bit.
   // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).

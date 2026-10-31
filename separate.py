@@ -49,6 +49,21 @@ def process_audio(file_path: str | Path, model_name: str = MODEL) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Pliki wyjściowe: {output_dir}", flush=True)
 
+    # Sprzęt: audio-separator sam wybiera CUDA, ale tylko jeśli torch ma build CUDA
+    # (`torch.cuda.is_available()`). Wheel `+cpu` = cicha praca na CPU, ~10× wolniej,
+    # więc mówimy to wprost w logu joba zamiast zostawiać użytkownika z domysłami.
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            print(f"Akceleracja: GPU · {torch.cuda.get_device_name(0)} · CUDA {torch.version.cuda}", flush=True)
+        else:
+            print(f"Akceleracja: CPU · torch {torch.__version__} bez CUDA", flush=True)
+            print("  GPU: uv pip install --python .venv/Scripts/python.exe "
+                  "--index-url https://download.pytorch.org/whl/cu130 torch==2.14.0+cu130", flush=True)
+    except Exception as exc:  # brak torch nie może wywalić samej separacji
+        print(f"Akceleracja: nieznana ({exc})", flush=True)
+
     # output_names nadaje polskie nazwy, ale biblioteka trzyma je DODATKOWO
     # w nazwie pliku (`<baza>_(Vocals)_wokal.wav`) — patrz normalizacja niżej.
     output_names = {"Vocals": "wokal", "Bass": "bas", "Drums": "bebny", "Other": "inne"}

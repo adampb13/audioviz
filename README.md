@@ -34,6 +34,28 @@ zależności pośrednie (`torch`, `onnxruntime`, `torchaudio`, `numba`, ...).
 Bez `onnxruntime` i `torchaudio` pakiet `audio-separator` instaluje się, ale
 `import` wywala się przy pierwszym użyciu — dlatego są przypięte jawnie.
 
+### GPU (opcjonalnie, ale mocno skraca podział)
+
+`torch` z PyPI to wheel **CPU** — audio-separator działa wtedy poprawnie, tylko
+wolno i bez ostrzeżenia. Wykrycie jest jednym warunkiem, `torch.cuda.is_available()`,
+więc wystarczy dołożyć build CUDA (Blackwell/sm_120 wymaga CUDA 12.8+):
+
+```powershell
+uv pip install --python .venv/Scripts/python.exe `
+    --index-url https://download.pytorch.org/whl/cu130 "torch==2.14.0+cu130"
+```
+
+`setup.ps1` robi to sam, gdy znajdzie `nvidia-smi` (`-SkipGpu` pomija). O tym,
+czy przebieg poszedł na karcie, mówi pierwsza linia logu zadania w bibliotece:
+`Akceleracja: GPU · NVIDIA GeForce RTX 5060 Ti · CUDA 13.0`.
+
+Zmierzone na RTX 5060 Ti — materiał 12 s:
+
+| etap | CPU | GPU |
+|---|---|---|
+| podział (`htdemucs.yaml`) | 82 s | **13 s** |
+| cały przebieg (podział + analiza + uderzenia) | 63 s | **27 s** |
+
 ## Pipeline
 
 Wszystko da się uruchomić z biblioteki w przeglądarce (kolejka zadań),
@@ -46,11 +68,13 @@ albo z konsoli, po kolei:
 
 `separate.py` domyślnie używa `htdemucs.yaml` (pobierany przy pierwszym
 uruchomieniu). `--model htdemucs_ft.yaml` daje czystsze stem'y, ale na CPU trwa
-~4× dłużej (zmierzone: 12 s materiału → 77 s vs 253 s).
+~3× dłużej (zmierzone: 12 s materiału → 77 s vs 253 s); na GPU różnica jest
+nieistotna, więc można spokojnie sięgnąć po `_ft`.
 
 Wgranie pliku w bibliotece od razu uruchamia podział i analizę (bez klikania),
 z logami na żywo i szacowanym czasem każdego kroku. ETA liczy się z modelu
-`czas ≈ a + b · długość` uczonego na zmierzonych przebiegach (`data/.eta.json`),
+`czas ≈ a + b · długość` uczonego na zmierzonych przebiegach (`data/.eta.json`,
+osobno dla GPU i CPU),
 a po każdym kroku jest korygowana o realne tempo tego zadania.
 
 ## Struktura

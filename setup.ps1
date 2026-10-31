@@ -9,16 +9,18 @@
     2. tworzy .venv (jeśli nie ma),
     3. instaluje requirements.txt (pełny, przypięty zestaw: torch,
        audio-separator, onnxruntime, torchaudio, librosa, ...),
-    4. npm install w viz/ (Three.js),
-    5. sprawdza, czy audio-separator naprawdę się importuje,
-    6. wypisuje komendę startową.
+    4. dokłada wheel CUDA dla torch, jeśli jest karta NVIDIA (-SkipGpu pomija),
+    5. npm install w viz/ (Three.js),
+    6. sprawdza, czy audio-separator naprawdę się importuje,
+    7. wypisuje komendę startową.
 
   Skrypt jest idempotentny — można go puszczać wielokrotnie.
 #>
 [CmdletBinding()]
 param(
     [string]$PythonVersion = "3.11",
-    [switch]$SkipNode
+    [switch]$SkipNode,
+    [switch]$SkipGpu
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,6 +61,34 @@ if ($uvCmd) {
     & $py -m pip install -r (Join-Path $root "requirements.txt")
 }
 if ($LASTEXITCODE -ne 0) { Fail "Instalacja zależności nie powiodła się (kod $LASTEXITCODE)." }
+
+# torch z PyPI to build CPU — audio-separator liczy wtedy na procesorze (na RTX
+# 5060 Ti: 12 s materiału 82 s zamiast ~15 s). Dokładamy wheel CUDA, jeśli jest karta.
+Step "Akceleracja GPU (torch CUDA)"
+$gpuName = $null
+if (-not $SkipGpu) {
+    $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($smi) {
+        $gpuName = (& nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1)
+    }
+}
+if ($SkipGpu) {
+    Write-Host "    pomijam (-SkipGpu)" -ForegroundColor Yellow
+} elseif (-not $gpuName) {
+    Write-Host "    brak NVIDIA — zostaje CPU (dla ~12 s klipu: ~80 s zamiast ~15 s)" -ForegroundColor Yellow
+} else {
+    Write-Host "    $gpuName"
+    # cu130 = CUDA 13.0: obejmuje Blackwell (sm_120, RTX 50xx). torchaudio zostaje.
+    if ($uvCmd) {
+        & uv pip install --python $py --index-url https://download.pytorch.org/whl/cu130 "torch==2.14.0+cu130"
+    } else {
+        & $py -m pip install --index-url https://download.pytorch.org/whl/cu130 "torch==2.14.0+cu130"
+    }
+    if ($LASTEXITCODE -ne 0) { Write-Host "    ! wheel CUDA nie wstał — zostaje CPU" -ForegroundColor Yellow }
+    else {
+        & $py -c "import torch; print('    torch', torch.__version__, '| cuda', torch.version.cuda, '| avail', torch.cuda.is_available())"
+    }
+}
 
 Step "Sprawdzenie krytycznych modułów"
 & $py -c @"

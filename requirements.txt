@@ -9,6 +9,14 @@
 # Kluczowe pakiety: audio-separator (Demucs), onnxruntime, torch, torchaudio,
 # librosa, soundfile, numpy, scipy. audio-separator bez onnxruntime/torchaudio
 # instaluje się, ale pada przy imporcie — dlatego są tu jawnie.
+#
+# GPU: pin `torch==2.15.0` z PyPI to wheel CPU (`+cpu`) i audio-separator po cichu
+# liczy na procesorze. Na maszynie z NVIDIA po instalacji tego pliku dołóż build
+# CUDA (sm_120/Blackwell wymaga CUDA 12.8+, tu sprawdzone cu130):
+#   uv pip install --python .venv/Scripts/python.exe \
+#       --index-url https://download.pytorch.org/whl/cu130 torch==2.14.0+cu130
+# `setup.ps1` robi to automatycznie, gdy wykryje nvidia-smi (pomiń: -SkipGpu).
+# torchaudio 2.11.1 (+cpu) działa z tym buildem — nie trzeba go ruszać.
 
 Cython==3.3.0
 Jinja2==3.1.6

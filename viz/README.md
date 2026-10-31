@@ -89,7 +89,7 @@ każdą parę „ścieżka → obiekt” testuje się bez grzebania w kodzie:
 | `wokal` | wstęga zjeżdża do cienkiej nici (szerokość 0.16 m, bez falowania) |
 | `bas` | kula wygładza się do idealnej kuli, zero struktury i zero żebra na bit, zero rozbłysku na drop |
 | `bebny` | zero fal na ziemi i zero pulsu sfery (już puszczone fale dożywają) |
-| `inne` | **kręgi na piasku** — każde uderzenie (`events.onsets`) rozchodzi się po ziemi kręgiem światła: siła → zasięg i jasność, `centroid_hz` → barwa kręgu (głęboki żar ↔ jaśniejsze złoto). Kręgi biegną w tempie instrumentów: gęste = szybki przebieg, jeden szeroki = akcent, pusty piasek = przerwa. Wchodzi też w energię całości → rozmiar i kolor sfery |
+| `inne` | **cząsteczki rytmu** — na każdy akcent (`events.onsets`) zapala się iskra w losowym miejscu sceny (od pierwszego planu po horyzont): przez 0.26 s rozbłyska i rośnie, potem spokojnie opada i gaśnie, a dotknąwszy piasku dogasa w miejscu. Barwa z rejestru widma (`centroid_hz`, ciemny żar ↔ jasne złoto), siła akcentu → jasność i rozmiar. Emisja bramkowana do ~1.5 zdarzenia/s, więc widać takt, nie młyn. Wchodzi też w energię całości → rozmiar i kolor sfery |
 
 Energia to mix stemów (`0.45 bas + 0.30 inne + 0.25 bebny`), więc wyciszenie ścieżki
 odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena naprawdę cicha.

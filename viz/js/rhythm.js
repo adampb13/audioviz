@@ -24,6 +24,28 @@ import * as THREE from "three";
 import { PRESETS, DEFAULT_PRESET } from "./palette.js";
 import { clamp } from "./data.js";
 
+// 64×64 biała kropka z radialnym spadkiem jasności — jedna tekstura na całą pulę.
+function softDot() {
+  const S = 64;
+  const c = document.createElement("canvas");
+  c.width = c.height = S;
+  const g = c.getContext("2d");
+  const r = S / 2;
+  const grd = g.createRadialGradient(r, r, 0, r, r, r);
+  grd.addColorStop(0.00, "rgba(255,255,255,1)");
+  grd.addColorStop(0.22, "rgba(255,255,255,0.62)");
+  grd.addColorStop(0.55, "rgba(255,255,255,0.18)");
+  grd.addColorStop(1.00, "rgba(255,255,255,0)");
+  g.fillStyle = grd;
+  g.fillRect(0, 0, S, S);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.needsUpdate = true;
+  return t;
+}
+
 const DEF = PRESETS[DEFAULT_PRESET].spark;
 let COLD = DEF.cold.slice();
 let MID = DEF.mid.slice();
@@ -37,8 +59,12 @@ const FALL_MAX = 0.85;
 const DRIFT = 0.14;        // boczny dryf (m/s)
 const SIZE_MIN = 0.075;    // m — ~4 px na tej scenie
 const SIZE_MAX = 0.28;
-const GAIN = 2.4;          // jasność cząsteczki (× kolor rejestru)
+const GAIN = 1.30;         // jasność: iskra, nie latarnia — wcześniej 2.4 rzucało się w oczy
 const GROUND_Y = 0.06;     // piasek
+const ATTACK = 0.26;       // s — miękkie pojawianie się (scale + jasność), nie „pstryk"
+const Z_NEAR = 16;         // m — najbliższy plan, w którym wolno zapalić iskrę
+const Z_FAR = -58;         // m — aż po horyzont
+const CAM_Y = 7, CAM_Z = 22; // kamera stoi tu; głębia steruje rozrzutem i rozmiarem
 
 // --- bramka produkcji (limity rytmu) ---
 // Progi siły są PER UTWÓR (`calibrate`): na gęstym materiale wyżej, na rzadkim
@@ -80,13 +106,18 @@ export class RhythmWheel {
     this._lastHit = -10;
     this._lastBeatHit = -10;
 
-    const geo = new THREE.IcosahedronGeometry(1, 1);
+    // Miękka kropka (radialny gradient) zamiast bryły: iskra ma rozmyty brzeg,
+    // więc bloom ma co „chwycić" i gaśnie płynnie. Ostry wielościan dawał twarde
+    // kółka — przy niższej jasności czytały się jak artefakt, nie jak światło.
+    const geo = new THREE.PlaneGeometry(1, 1);
     const mat = new THREE.MeshBasicMaterial({
+      map: softDot(),
       color: 0xffffff,
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       depthTest: true,
+      side: THREE.DoubleSide,
     });
     this.mesh = new THREE.InstancedMesh(geo, mat, POOL);
     this.mesh.frustumCulled = false;
@@ -182,14 +213,18 @@ export class RhythmWheel {
     this.cursor++;
     const i3 = i * 3;
 
-    // miejsce: losowo wokół sfery, czasem dalej na piasku — „na scenie", ale
-    // nigdy pod kamerą i nigdy w powietrzu nad horyzontem
-    const ang = Math.random() * Math.PI * 2;
-    const rad = 1.6 + Math.pow(Math.random(), 0.65) * 8.2;
-    this.pos[i3] = Math.cos(ang) * rad;
-    // wysokość startu: akcent potrafi wyjść wysoko (na tle gór), słaby tuż nad piaskiem
-    this.pos[i3 + 1] = 0.40 + Math.random() * (1.6 + 3.0 * strength);
-    this.pos[i3 + 2] = Math.sin(ang) * rad * 0.82;
+    // miejsce: CAŁA scenа, nie tylko środek. Głębia (z) decyduje o tym, jak szeroko
+    // wolno się rozrzucić — na horyzoncie ekran jest fizycznie szerszy niż pod kamerą.
+    // Wcześniej promień 1.6-9.8 m trzymał wszystkie iskry w kupie przy kopcu.
+    const z = Z_NEAR - Math.random() * (Z_NEAR - Z_FAR);
+    const depth = CAM_Z - z;                       // odległość od kamery wzdłuż osi
+    const halfW = depth * 0.62;                    // ~połowa szerokości kadru na tej głębi
+    const x = (Math.random() * 2 - 1) * Math.sqrt(Math.random()) * halfW;
+    this.pos[i3] = x;
+    this.pos[i3 + 2] = z;
+    // wysokość startu: akcent potrafi wyjść wyżej (na tle gór), słaby tuż nad piaskiem
+    const hScale = clamp(depth / CAM_Z, 1, 2.1);
+    this.pos[i3 + 1] = 0.35 + Math.random() * (1.4 + 2.6 * strength) * hScale;
 
     this.vel[i3] = (Math.random() - 0.5) * DRIFT * 2;
     this.vel[i3 + 1] = -(FALL_MIN + Math.random() * (FALL_MAX - FALL_MIN));
@@ -197,8 +232,11 @@ export class RhythmWheel {
 
     this.age[i] = 0;
     this.life[i] = LIFE_MIN + Math.random() * (LIFE_MAX - LIFE_MIN);
-    this.size[i] = SIZE_MIN + Math.random() * (SIZE_MAX - SIZE_MIN) * (0.6 + 0.4 * strength);
-    this.gain[i] = 0.55 + 0.45 * strength;
+    // rozmiar w metrach rośnie z odległością, żeby daleka iskra nie była ziarnem
+    this.size[i] = (SIZE_MIN + Math.random() * (SIZE_MAX - SIZE_MIN) * (0.6 + 0.4 * strength))
+      * clamp(depth / CAM_Z, 0.35, 2.5);
+    // powietrzna perspektywa: im dalej, tym ciszej — inaczej horyzont roi się od kropek
+    this.gain[i] = (0.42 + 0.36 * strength) * (1 - 0.28 * clamp((depth - CAM_Z) / 70, 0, 1));
 
     let c;
     if (lane === 0) c = COLD;
@@ -215,9 +253,11 @@ export class RhythmWheel {
     this.spawned++;
   }
 
-  update(t, dt, active, bpm) {
+  update(t, dt, active, bpm, cam) {
     this.now = t;
     if (bpm) this.bpm = bpm;
+    // wszystkie iskry to billboardy: jedna orientacja na klatkę, zero alokacji
+    if (cam) this._q.copy(cam.quaternion);
     const period = 60 / Math.max(40, this.gridBpm);
     this.beat = (t % period) / period;
 
@@ -251,18 +291,23 @@ export class RhythmWheel {
       this.pos[i3 + 1] = y;
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt * speed;
 
-      // natychmiast pełna jasność, potem spokojne gaśnięcie
-      const fade = Math.min(1, (1 - u) * 1.45);
-      const k = fade * fade * GAIN * this.gain[i];
+      // POJAWIANIE: 0.26 s miękkiego rozbłysku (scale 0.55 -> 1, jasność 0 -> 1),
+      // potem długie, gładkie gaśnięcie do dokładnie zera na końcu życia.
+      // Wcześniej `(1-u)^2` schodziło z pełnej jasności już od 31% życia i bloom
+      // gasł skokowo — iskra „mrugała", zamiast płynnie się rozmywać.
+      const ua = this.age[i] / ATTACK;
+      const appear = ua >= 1 ? 1 : ua * ua * (3 - 2 * ua);            // smoothstep
+      const release = u < 0.5 ? 1 : 1 - (u - 0.5) * 2;                 // 0 na końcu
+      const k = appear * release * release * GAIN * this.gain[i];
       this.shown[i3] = this.col[i3] * k;
       this.shown[i3 + 1] = this.col[i3 + 1] * k;
       this.shown[i3 + 2] = this.col[i3 + 2] * k;
 
-      const sc = this.size[i];
+      const sc = this.size[i] * (0.55 + 0.45 * appear) * 2.8; // plane 1×1 → średnica
       this._s.set(sc, sc, sc);
       this._m.compose(this._p.set(this.pos[i3], y, this.pos[i3 + 2]), this._q, this._s);
       this.mesh.setMatrixAt(i, this._m);
-      if (fade > 0.05) alive++;
+      if (appear * release > 0.08) alive++;
     }
 
     this.marks = alive;
