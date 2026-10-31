@@ -43,14 +43,20 @@ const SHORT = {
   pitch_hz: "pitch",
 };
 
-// Pola, które realnie sterują sceną — kropka • i tooltip (main.js → moduły).
+// Pola, które REALNIE moderują scenę — kropka przy wartości + tooltip.
+// Klucz to `stem.id` z analysis.json (np. `inne.onset_strength`), a nie etykieta:
+// poprzednie wpisy („inne.onset siła") nie trafiały w żadne p.id, więc kropka
+// nie pojawiała się przy najważniejszych parametrach cząsteczek.
 const DRIVES = {
-  "inne.onset (zdarzenia)": "cząsteczki: uderzenie = 1-3 cząsteczki; bramka (próg, refrakcja, takt) trzyma ~2-4 zdarzenia/s",
-  "inne.onset siła": "cząsteczki: ile ich wyjdzie (1-3) i jakie duże — akcent daje więcej",
+  "inne.onset_strength": "cząsteczki: każde uderzenie = 1-3 iskry (siła → ile i jak duże); bramka trzyma ~1.5 zdarzenia/s",
+  "inne.onset_norm": "cząsteczki: znormalizowana siła uderzenia — ta sama bramka, inna skala",
   "inne.centroid_hz": "cząsteczki: barwa rejestru — ciemny żar / złoto / jaśniejsze złoto",
   "bas.rms_norm": "struktura kuli: amplituda i tempo falowania powłoki (uStruct/uWobble)",
-  "bebny.peak": "fale na ziemi + puls rozmiaru kuli",
+  "bebny.rms_norm": "fale na ziemi + puls rozmiaru kuli (próg akcentu liczony z tego sygnału)",
+  "bebny.peak": "fale na ziemi + puls rozmiaru kuli — szczyt wyznacza akcent",
   "wokal.rms_norm": "szerokość wstęgi + drżenie powierzchni kuli",
+  "wokal.pitch_midi": "wysokość wstęgi (unosi się z melodią)",
+  "wokal.centroid_hz": "jasność wstęgi — wyższe składowe = jaśniejsze złoto",
 };
 
 const UNIT = {
@@ -95,9 +101,9 @@ const DBG = [
   ]],
   ["sfera", [
     ["glow (kolor)", (i) => f3(i.core?.glow)],
-    ["uStruct", (i) => f3(i.core?.uStruct)],
+    ["uStruct", (i) => f3(i.core?.uStruct), true],
     ["uWobble", (i) => f3(i.core?.uWobble)],
-    ["puls bębnów", (i) => f3(i.core?.pulse)],
+    ["puls bębnów", (i) => f3(i.core?.pulse), true],
     ["skala", (i) => f3(i.core?.scale)],
     ["promień", (i) => (i.core?.radius != null ? i.core.radius.toFixed(3) + " m" : "—")],
   ]],
@@ -107,7 +113,7 @@ const DBG = [
     ["bas", (i) => arrow(i.raw?.bRms, i.env?.bRms)],
     ["bębny", (i) => arrow(i.raw?.dRms, i.env?.dRms)],
     ["inne", (i) => arrow(i.raw?.oRms, i.env?.oRms)],
-    ["energia", (i) => arrow(i.raw?.energy, i.env?.energy)],
+    ["energia", (i) => arrow(i.raw?.energy, i.env?.energy), true],
     ["tempo", (i) => (i.tempo ? Math.round(i.tempo) + " bpm" : "—")],
   ]],
   // koronę czytamy jak miernik rytmu: ile słupków pali się TERAZ, jak szybko
@@ -120,11 +126,11 @@ const DBG = [
     ["ostatni peak", (i) => f3(i.other?.peak)],
   ]],
   ["zdarzenia", [
-    ["fale", (i) => String(i.waves ?? 0)],
+    ["fale", (i) => String(i.waves ?? 0), true],
     ["onsety", (i) => String(i.onsets ?? 0)],
     ["rozbłyski", (i) => String(i.bursts ?? 0)],
-    ["trafienia inne", (i) => String(i.otherHits ?? 0)],
-    ["cząsteczki rytmu", (i) => String(i.wheelMarks ?? 0)],
+    ["trafienia inne", (i) => String(i.otherHits ?? 0), true],
+    ["cząsteczki rytmu", (i) => String(i.wheelMarks ?? 0), true],
     ["dropEnv", (i) => f3(i.dropEnv)],
   ]],
   ["utwór / miks", [
@@ -215,7 +221,10 @@ export function createHud(track) {
         }
 
         const vl = document.createElement("span");
-        vl.className = "vl";
+        // Kropka siedzi przy WARTOŚCI (nie przy etykiecie): to ona się zmienia,
+        // gdy parametr moderuje scenę. Tooltip zostaje na etykiecie.
+        vl.className = drive ? "vl drv" : "vl";
+        if (drive) vl.title = drive;
 
         let entry;
         if (p.k > 1) {
@@ -279,14 +288,15 @@ export function createHud(track) {
     gtl.className = "gt";
     gtl.textContent = title;
     grp.append(gtl);
-    for (const [label, get] of items) {
+    for (const [label, get, drv] of items) {
       const row = document.createElement("div");
       row.className = "row kv";
       const lb = document.createElement("span");
       lb.className = "lb";
       lb.textContent = label;
       const vv = document.createElement("span");
-      vv.className = "vv";
+      vv.className = drv ? "vv drv" : "vv";
+      if (drv) vv.title = "ta wartość moderuje scenę";
       row.append(lb, vv);
       grp.append(row);
       dbgRows.push({ vv, get });

@@ -71,6 +71,18 @@ uruchomieniu). `--model htdemucs_ft.yaml` daje czystsze stem'y, ale na CPU trwa
 ~3× dłużej (zmierzone: 12 s materiału → 77 s vs 253 s); na GPU różnica jest
 nieistotna, więc można spokojnie sięgnąć po `_ft`.
 
+### Pobieranie z sieci (domyślna droga w bibliotece)
+
+Na stronie głównej, nad strefą wgrywania, jest panel „pobierz z sieci": wpisujesz
+tytuł (albo wklejasz link), wybierasz wynik i reszta dzieje się sama — `yt-dlp`
+ściąga bestaudio, `ffmpeg` zamienia je na `data/<utwór>.wav`, a potem lecą te same
+kroki co przy wgraniu pliku (podział → analiza → uderzenia). Limit: 15 min na
+materiał (dłuższe to zwykle składanki/radio).
+
+`yt-dlp` jest w `requirements.txt`; `ffmpeg` to osobny program w `PATH`
+(`winget install Gyan.FFmpeg`, `brew install ffmpeg`). Bez niego panel pokaże
+`pobieranie brak` w nagłówku zamiast wywalać się w połowie pobierania.
+
 Wgranie pliku w bibliotece od razu uruchamia podział i analizę (bez klikania),
 z logami na żywo i szacowanym czasem każdego kroku. ETA liczy się z modelu
 `czas ≈ a + b · długość` uczonego na zmierzonych przebiegach (`data/.eta.json`,
@@ -84,6 +96,6 @@ server.py          # serwer statyczny + API + kolejka zadań (stdlib, :8080)
 separate.py        # Demucs: 4 stem'y
 analyze_stems.py   # analiza stemów -> analysis.json
 detect_hits.py     # detekcja uderzeń (używane przez analyze_stems)
-viz/               # scena Three.js (index.html, home.html, js/)
+viz/               # scena Three.js (index.html, home.html, js/, logo.png, favicon.png)
 data/<utwór>/      # źródło + stem'y + analysis.json (pliki audio poza repo)
 ```

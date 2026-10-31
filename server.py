@@ -6,6 +6,8 @@ JEDEN proces obsługuje wszystko, bez zależności zewnętrznych (stdlib):
     /viz/home.html         -> strona główna: utwory, upload, przygotowanie
     /viz/index.html        -> wizualizacja (statycznie, z Range dla WAV-ów)
     /api/state             -> JSON: utwory + zadania + możliwości środowiska
+    /api/search?q=...      -> GET wyszukiwanie w YouTube (yt-dlp, same metadane)
+    /api/fetch             -> POST {url, title} = pobierz audio i przygotuj utwór
     /api/upload?name=x.wav -> PUT surowych bajtów = nowy utwór w data/
     /api/stems/x?stem=...  -> PUT surowych bajtów = pojedynczy stem do data/x/
     /api/run               -> POST {slug, steps|prepare} = uruchom skrypty
@@ -46,6 +48,9 @@ AUDIO_EXT = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aiff", ".aif"}
 STEMS = ("wokal", "bas", "bebny", "inne")
 STEM_LABELS = {"wokal": "wokal", "bas": "bas", "bebny": "bębny", "inne": "inne"}
 MAX_UPLOAD = 1024 * 1024 * 1024  # 1 GB — WAV-y po 40-50 MB to norma, FLAC-i też
+FFMPEG = shutil.which("ffmpeg")   # potrzebny, gdy audio z sieci trzeba przekonwertować
+YTDL_MAX_DUR = 900.0             # s — dłuższe nagrania to zwykle składanki/radio
+YT_SEARCH_N = 8
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 LOG_LINES = 400
@@ -69,8 +74,10 @@ ETA_PATH = DATA / ".eta.json"
 # więc jeden zestaw stałych dla obu przypadków zawsze kłamał w którąś stronę.
 # `separate` na GPU ≈ 6 s narzutu (ładowanie sieci) + 0.62 s na sekundę materiału.
 ETA_DEFAULTS = {
-    "gpu": {"separate": (6.0, 0.62), "analyze": (2.5, 0.28), "hits": (2.0, 0.02)},
-    "cpu": {"separate": (50.0, 2.2), "analyze": (2.5, 0.28), "hits": (2.0, 0.02)},
+    "gpu": {"separate": (6.0, 0.62), "analyze": (2.5, 0.28), "hits": (2.0, 0.02),
+            "fetch": (18.0, 0.05)},
+    "cpu": {"separate": (50.0, 2.2), "analyze": (2.5, 0.28), "hits": (2.0, 0.02),
+            "fetch": (18.0, 0.05)},
 }
 ETA_MIN_SAMPLES = 3
 ETA_LOCK = threading.Lock()
@@ -208,6 +215,69 @@ def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9._-]+", "-", s)
     s = re.sub(r"-{2,}", "-", s).strip("-._")
     return s[:64] or "utwor"
+
+
+def unique_slug(base: str) -> str:
+    """Slug wolny w data/ — druga wersja tego samego utworu nie może go nadpisać."""
+    base = slugify(base)
+    def taken(s: str) -> bool:
+        return _source_path(s) is not None or (DATA / s).is_dir()
+    if not taken(base):
+        return base
+    for i in range(2, 50):
+        cand = f"{base[:58]}-{i}"
+        if not taken(cand):
+            return cand
+    raise ValueError("za dużo wersji o tej nazwie — zmień nazwę utworu")
+
+
+def _check_url(url: str) -> str:
+    """Tylko publiczne http(s) — yt-dlp na localhost/127.x byłby dziurą (SSRF)."""
+    p = urlparse(url)
+    if p.scheme not in ("http", "https") or not p.netloc:
+        raise ValueError("adres musi zaczynać się od http:// lub https://")
+    host = (p.hostname or "").lower()
+    if (host in ("localhost", "::1") or host.endswith(".local")
+            or re.match(r"^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)", host)):
+        raise ValueError("adresy lokalne są zablokowane")
+    return url
+
+
+def yt_search(query: str, n: int = YT_SEARCH_N) -> list[dict]:
+    """Szuka w YouTube i zwraca płaskie wyniki (bez pobierania czegokolwiek)."""
+    import yt_dlp  # noqa: PLC0415 — opcjonalna zależność (import trwa ~0.3 s)
+
+    opts = {
+        "quiet": True, "no_warnings": True, "noplaylist": True,
+        "extract_flat": "in_playlist", "skip_download": True, "socket_timeout": 20,
+    }
+    # Wklejony link nie jest zapytaniem: rozwiązujemy go bezpośrednio, żeby
+    # panel obsługiwał oba wejścia (szukanie i „mam już adres").
+    if query.startswith(("http://", "https://")):
+        _check_url(query)
+        opts.pop("extract_flat", None)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(query, download=False) or {}
+        entries = [info] if info.get("id") else list(info.get("entries") or [])
+    else:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{n}:{query}", download=False) or {}
+        entries = list(info.get("entries") or [])
+    out = []
+    for e in entries:
+        if not e or not e.get("id"):
+            continue
+        dur = int(e.get("duration") or 0)
+        out.append({
+            "id": e["id"],
+            "url": f"https://www.youtube.com/watch?v={e['id']}",
+            "title": (e.get("title") or "").strip(),
+            "uploader": (e.get("uploader") or e.get("channel") or "").strip(),
+            "duration": dur,
+            "thumb": f"https://i.ytimg.com/vi/{e['id']}/mqdefault.jpg",
+            "slug": unique_slug(e.get("title") or e["id"]),
+        })
+    return out
 
 
 def human_bytes(n: int) -> str:
@@ -382,11 +452,13 @@ def scan_tracks() -> list[dict]:
 #  Zadania (jeden worker, kolejka FIFO)
 # --------------------------------------------------------------------------- #
 STEP_INFO = {
+    "fetch": {"label": "pobieranie", "tool": "yt-dlp + ffmpeg"},
     "separate": {"label": "podział na stem'y", "tool": "audio-separator (Demucs)"},
     "analyze": {"label": "analiza (librosa)", "tool": "analyze_stems.py"},
     "hits": {"label": "detekcja uderzeń", "tool": "detect_hits.py"},
 }
-STEP_ORDER = ["separate", "analyze", "hits"]
+# „fetch" tylko dla utworów z sieci — w zwykłym przygotowaniu go nie ma
+STEP_ORDER = ["fetch", "separate", "analyze", "hits"]
 
 CAPS: dict[str, bool] = {}
 
@@ -395,15 +467,21 @@ def probe_caps() -> dict:
     CAPS.update({
         "separator": _python_has("audio_separator"),
         "librosa": _python_has("librosa"),
+        # pobieranie z sieci: yt-dlp to biblioteka, ffmpeg przekłada audio na WAV
+        "ytdlp": _python_has("yt_dlp"),
+        "ffmpeg": bool(FFMPEG),
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
     })
     return CAPS
 
 
 class Job:
-    def __init__(self, slug: str, steps: list[str]):
+    def __init__(self, slug: str, steps: list[str], url: str | None = None,
+                 duration: float | None = None):
         self.id = uuid.uuid4().hex[:10]
         self.slug = slug
+        self.source_url = url          # tylko dla kroku „fetch" (pobieranie z sieci)
+        self.progress: float | None = None   # % pobierania, gdy krok to „fetch"
         self.steps = [{"key": s, "label": STEP_INFO[s]["label"], "status": "queued"} for s in steps]
         self.status = "queued"          # queued | running | done | error | cancelled
         self.current: str | None = None
@@ -412,7 +490,8 @@ class Job:
         self.finished: float | None = None
         self.error: str | None = None
         self.lines: deque[dict] = deque(maxlen=LOG_LINES)
-        self.duration = audio_duration(slug)          # długość materiału (s)
+        # przy pobieraniu z sieci długości jeszcze nie ma — 0 znaczy „ustalę po fetchu"
+        self.duration = duration if duration is not None else audio_duration(slug)
         model = _eta_model()
         self.eta = {s: eta_seconds(s, self.duration, model) for s in steps}
         self.eta_scale = 1.0                          # korekta po zmierzonym kroku
@@ -452,6 +531,8 @@ class Job:
             "queue_pos": _QUEUE.qsize() if self.status == "queued" else 0,
             "lines": list(self.lines)[-tail:],
             "duration": round(self.duration, 1),
+            "progress": self.progress,
+            "url": self.source_url,
             "eta_total": round(total, 1),
             "eta_left": round(left, 1),
         }
@@ -470,6 +551,92 @@ class Job:
 _JOBS: dict[str, Job] = {}
 _JOBS_LOCK = threading.Lock()
 _QUEUE: queue.Queue[Job] = queue.Queue()
+
+
+def _run_fetch(job: Job) -> None:
+    """Krok „fetch": yt-dlp ściąga bestaudio, ffmpeg składa z niego WAV w data/.
+
+    Postęp leci do logu zadania (panel pokazuje ten sam dziennik co przy
+    podziale), a po zakończeniu uzupełniamy długość materiału — dopiero wtedy
+    ETA podziału i analizy ma sens (przed pobraniem nie znamy długości).
+    """
+    import yt_dlp  # noqa: PLC0415 — opcjonalna zależność
+
+    url = job.source_url or ""
+    if not url.startswith(("http://", "https://")):
+        raise RuntimeError("brak poprawnego adresu do pobrania")
+    DATA.mkdir(exist_ok=True)
+    stem = DATA / f"{job.slug}.ytdl"
+    last = [0.0]
+
+    def hook(d: dict) -> None:
+        if job._cancel.is_set():
+            raise _Cancelled()
+        st = d.get("status")
+        if st == "downloading":
+            now = time.time()
+            if now - last[0] < 1.0:      # log co sekundę, nie na każdy chunk
+                return
+            last[0] = now
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            done = int(d.get("downloaded_bytes") or 0)
+            pct = (done / total) if total else 0.0
+            job.progress = round(pct * 100, 1) if total else None
+            speed = int(d.get("speed") or 0)
+            left = d.get("eta") or 0
+            job.log("pobieranie " + (f"{pct * 100:.0f}%" if total else human_bytes(done))
+                    + (f" · {human_bytes(speed)}/s" if speed else "")
+                    + (f" · zostało ~{fmt_dur(left)}" if left else ""))
+        elif st == "finished":
+            job.progress = None
+            job.log("pobrano — konwersja do WAV (ffmpeg)")
+
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": f"{stem}.%(ext)s",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "progress_hooks": [hook],
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "wav"}],
+        "retries": 3,
+        "socket_timeout": 30,
+    }
+    if FFMPEG:
+        opts["ffmpeg_location"] = str(Path(FFMPEG).parent)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True) or {}
+    except Exception as e:  # noqa: BLE001 — komunikat yt-dlp ma trafić do UI
+        if job._cancel.is_set():
+            raise _Cancelled() from None
+        raise RuntimeError(f"pobieranie nie udało się: {str(e)[:300]}") from None
+
+    src = DATA / f"{job.slug}.ytdl.wav"
+    if not src.is_file():
+        cand = [c for c in sorted(DATA.glob(f"{job.slug}.ytdl.*")) if c.suffix.lower() == ".wav"]
+        if cand:
+            src = cand[0]
+    if not src.is_file():
+        raise RuntimeError("yt-dlp nie zostawił pliku WAV — sprawdź, czy ffmpeg jest w PATH")
+
+    dur = float(info.get("duration") or 0.0)
+    if dur > YTDL_MAX_DUR:
+        src.unlink(missing_ok=True)
+        raise RuntimeError(f"materiał ma {fmt_dur(dur)} — limit to {fmt_dur(YTDL_MAX_DUR)}")
+
+    target = DATA / f"{job.slug}.wav"
+    os.replace(src, target)
+    for junk in DATA.glob(f"{job.slug}.ytdl.*"):     # resztki po konwersji
+        junk.unlink(missing_ok=True)
+    _DUR_CACHE.pop(job.slug, None)
+    job.duration = audio_duration(job.slug)
+    model = _eta_model()
+    job.eta = {s: eta_seconds(s, job.duration, model) for s in job.eta}
+    job.log(f"źródło: {info.get('title') or job.slug}", "eta")
+    job.log(f"gotowe: {target.name} · {human_bytes(target.stat().st_size)} · "
+            f"{fmt_dur(job.duration)}", "ok")
 
 
 def _cmd_for(step: str, slug: str) -> list[str]:
@@ -492,6 +659,22 @@ def _run_step(job: Job, step: str) -> None:
     for s in job.steps:
         if s["key"] == step:
             s["status"] = "running"
+    if step == "fetch":
+        # pobieranie idzie w tym samym wątku roboczym (nie podprocesem): yt-dlp
+        # raportuje postęp callbackiem, więc log zadania widać na żywo
+        job.step_started = time.time()
+        job.log(f"adres: {job.source_url}", "eta")
+        try:
+            _run_fetch(job)
+        finally:
+            job.progress = None
+        if job._cancel.is_set():
+            raise _Cancelled()
+        job.step_actual[step] = time.time() - job.step_started
+        for s in job.steps:
+            if s["key"] == step:
+                s["status"] = "done"
+        return
     if step == "separate" and not CAPS.get("separator"):
         raise RuntimeError(
             "brak modułu audio-separator w tym środowisku — podział na stem'y nie ruszy. "
@@ -577,7 +760,7 @@ def _worker() -> None:
             _QUEUE.task_done()
 
 
-def enqueue(slug: str, steps: list[str]) -> Job:
+def enqueue(slug: str, steps: list[str], url: str | None = None) -> Job:
     steps = [s for s in STEP_ORDER if s in set(steps)]
     if not steps:
         raise ValueError("brak kroków do wykonania")
@@ -587,7 +770,9 @@ def enqueue(slug: str, steps: list[str]) -> Job:
         for j in _JOBS.values():
             if j.slug == slug and j.status in ("queued", "running"):
                 raise ValueError("ten utwór już się przetwarza")
-        job = Job(slug, steps)
+        # zadanie z „fetch" startuje bez pliku, więc długość (a tym samym ETA
+        # podziału) poznajemy dopiero po pobraniu
+        job = Job(slug, steps, url=url, duration=0.0 if url else None)
         _JOBS[job.id] = job
         # trzymamy tylko 20 ostatnich zadań — to nie jest historia, tylko podgląd
         if len(_JOBS) > 20:
@@ -610,6 +795,15 @@ def job_for(slug: str) -> dict | None:
 #  HTTP
 # --------------------------------------------------------------------------- #
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # Pliki statyczne dostają `no-cache` (rewalidacja przez Last-Modified), a nie
+    # heurystyczny cache przeglądarki: po edycji JS odświeżenie pokazywało stary
+    # bundle i „zmiana nie działa", dopóki nie wymuszono twardego reloadu.
+    _sent_no_store = False
+
+    def end_headers(self) -> None:
+        if not self._sent_no_store:
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
     extensions_map = {
         **http.server.SimpleHTTPRequestHandler.extensions_map,
         ".js": "text/javascript", ".mjs": "text/javascript",
@@ -677,6 +871,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._sent_no_store = True       # end_headers() nie dokłada wtedy no-cache
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -743,6 +938,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def _api_get(self, path: str, qs: dict) -> None:
+        if path == "/api/search":
+            q = (qs.get("q") or [""])[0].strip()
+            if len(q) < 2:
+                return self._err(400, "wpisz co najmniej 2 znaki")
+            if not CAPS.get("ytdlp"):
+                return self._err(503, "brak yt-dlp w środowisku serwera — "
+                                      "uv pip install --python .venv/Scripts/python.exe yt-dlp")
+            try:
+                res = yt_search(q[:120])
+            except Exception as e:  # noqa: BLE001 — sieć bywa niedostępna
+                return self._err(502, f"wyszukiwanie nie udało się: {str(e)[:200]}")
+            return self._json({"query": q, "results": res})
         if path == "/api/state":
             tracks = scan_tracks()
             for t in tracks:
@@ -829,6 +1036,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             if path == "/api/run":
                 return self._post_run()
+            if path == "/api/fetch":
+                return self._post_fetch()
             if path == "/api/cancel":
                 jid = (qs.get("id") or [""])[0]
                 with _JOBS_LOCK:
@@ -840,6 +1049,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._err(404, "nieznany endpoint")
         except ValueError as e:
             return self._err(400, str(e))
+
+    def _post_fetch(self) -> None:
+        """Pobierz utwór z sieci i od razu puść cały łańcuch (all in one click)."""
+        body = self._json_body()
+        url = _check_url(str(body.get("url") or "").strip())
+        if not CAPS.get("ytdlp"):
+            raise ValueError("brak yt-dlp w środowisku serwera")
+        if not CAPS.get("ffmpeg"):
+            raise ValueError("brak ffmpeg w PATH — potrzebny do konwersji na WAV")
+        title = str(body.get("title") or "").strip() or "utwor"
+        slug = unique_slug(body.get("slug") or title)
+        job = enqueue(slug, ["fetch", "separate", "analyze", "hits"], url=url)
+        job.log(f"utwór: {title}", "eta")
+        self._json({"ok": True, "slug": slug, "job": job.as_dict()}, 202)
 
     def _post_run(self) -> None:
         body = self._json_body()

@@ -17,6 +17,11 @@
 #       --index-url https://download.pytorch.org/whl/cu130 torch==2.14.0+cu130
 # `setup.ps1` robi to automatycznie, gdy wykryje nvidia-smi (pomiń: -SkipGpu).
 # torchaudio 2.11.1 (+cpu) działa z tym buildem — nie trzeba go ruszać.
+#
+# Pobieranie utworów z sieci (panel na stronie głównej): yt-dlp ściąga audio,
+# ffmpeg składa z niego WAV. yt-dlp jest w tym pliku; ffmpeg trzeba mieć w PATH
+# (winget install Gyan.FFmpeg / brew install ffmpeg). Bez ffmpeg panel pokaże
+# „pobieranie brak” zamiast się wywalać w połowie roboty.
 
 Cython==3.3.0
 Jinja2==3.1.6
@@ -80,3 +85,4 @@ tqdm==4.70.1
 typing_extensions==4.16.0
 urllib3==2.8.0
 websockets==17.3
+yt-dlp==2026.10.26

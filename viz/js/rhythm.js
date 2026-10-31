@@ -60,7 +60,7 @@ const DRIFT = 0.14;        // boczny dryf (m/s)
 const SIZE_MIN = 0.075;    // m — ~4 px na tej scenie
 const SIZE_MAX = 0.28;
 const GAIN = 1.30;         // jasność: iskra, nie latarnia — wcześniej 2.4 rzucało się w oczy
-const GROUND_Y = 0.06;     // piasek
+const SAND_FADE = 0.55;    // m — iskra przygasa tuż nad piaskiem, ale na niego nie spada
 const ATTACK = 0.26;       // s — miękkie pojawianie się (scale + jasność), nie „pstryk"
 const Z_NEAR = 16;         // m — najbliższy plan, w którym wolno zapalić iskrę
 const Z_FAR = -58;         // m — aż po horyzont
@@ -105,6 +105,8 @@ export class RhythmWheel {
     this._pending = 0;
     this._lastHit = -10;
     this._lastBeatHit = -10;
+    // połowa szerokości kadru na 1 m głębi (tan(fov/2)·aspect) — z kamery w update()
+    this.fovK = 0.62;
 
     // Miękka kropka (radialny gradient) zamiast bryły: iskra ma rozmyty brzeg,
     // więc bloom ma co „chwycić" i gaśnie płynnie. Ostry wielościan dawał twarde
@@ -213,18 +215,25 @@ export class RhythmWheel {
     this.cursor++;
     const i3 = i * 3;
 
-    // miejsce: CAŁA scenа, nie tylko środek. Głębia (z) decyduje o tym, jak szeroko
+    // miejsce: CAŁA scena, nie tylko środek. Głębia (z) decyduje o tym, jak szeroko
     // wolno się rozrzucić — na horyzoncie ekran jest fizycznie szerszy niż pod kamerą.
     // Wcześniej promień 1.6-9.8 m trzymał wszystkie iskry w kupie przy kopcu.
     const z = Z_NEAR - Math.random() * (Z_NEAR - Z_FAR);
     const depth = CAM_Z - z;                       // odległość od kamery wzdłuż osi
-    const halfW = depth * 0.62;                    // ~połowa szerokości kadru na tej głębi
-    const x = (Math.random() * 2 - 1) * Math.sqrt(Math.random()) * halfW;
+    // Połowa szerokości kadru na tej głębi liczy się z FOV kamery (tan(fov/2)·aspect),
+    // a nie ze stałej 0.62: przy innym kadrze iskry kończyły się w połowie drogi do
+    // krawędzi. 1.12 to zapas, żeby skrajne iskry naprawdę sięgały brzegów sceny.
+    const halfW = depth * this.fovK * 1.12;
+    // rozkład `pow(u, 0.62)` wypycha iskry na boki (sqrt dawał środek sceny gęstszy
+    // niż brzegi — narzekanie „tylko na środku” dotyczyło właśnie tego)
+    const x = (Math.random() * 2 - 1) * Math.pow(Math.random(), 0.62) * halfW;
     this.pos[i3] = x;
     this.pos[i3 + 2] = z;
     // wysokość startu: akcent potrafi wyjść wyżej (na tle gór), słaby tuż nad piaskiem
     const hScale = clamp(depth / CAM_Z, 1, 2.1);
-    this.pos[i3 + 1] = 0.35 + Math.random() * (1.4 + 2.6 * strength) * hScale;
+    // start NAD pasem przygasania (SAND_FADE = 0.55 m): iskra urodzona tuż nad
+    // piaskiem byłaby od pierwszej klatki półprzezroczysta
+    this.pos[i3 + 1] = 0.75 + Math.random() * (1.4 + 2.6 * strength) * hScale;
 
     this.vel[i3] = (Math.random() - 0.5) * DRIFT * 2;
     this.vel[i3 + 1] = -(FALL_MIN + Math.random() * (FALL_MAX - FALL_MIN));
@@ -257,7 +266,10 @@ export class RhythmWheel {
     this.now = t;
     if (bpm) this.bpm = bpm;
     // wszystkie iskry to billboardy: jedna orientacja na klatkę, zero alokacji
-    if (cam) this._q.copy(cam.quaternion);
+    if (cam) {
+      this._q.copy(cam.quaternion);
+      this.fovK = Math.tan((cam.fov * Math.PI) / 360) * cam.aspect;
+    }
     const period = 60 / Math.max(40, this.gridBpm);
     this.beat = (t % period) / period;
 
@@ -279,17 +291,16 @@ export class RhythmWheel {
         continue;
       }
 
-      // opadanie z osiadaniem na piasku (nie „przelatuje" przez scenę)
-      let y = this.pos[i3 + 1] + this.vel[i3 + 1] * dt * speed;
-      if (y <= GROUND_Y) {
-        y = GROUND_Y;
-        this.vel[i3 + 1] = 0;
-        this.vel[i3] *= 0.4;
-        this.vel[i3 + 2] *= 0.4;
-      }
+      // Swobodny opad — bez lądowania na piasku. Wcześniej iskra zatrzymywała się
+      // na poziomie gruntu i dogasała w miejscu, więc na ziemi zbierała się jasna
+      // „podłoga" z nieruchomych kropek. Teraz spada dalej i gaśnie z czasem,
+      // a tuż nad piaskiem (SAND_FADE) przygasa, żeby nie przeciąć ziemi widoczną linią.
+      const y = this.pos[i3 + 1] + this.vel[i3 + 1] * dt * speed;
       this.pos[i3] += this.vel[i3] * dt * speed;
       this.pos[i3 + 1] = y;
       this.pos[i3 + 2] += this.vel[i3 + 2] * dt * speed;
+      const su = y >= SAND_FADE ? 1 : Math.max(0, y / SAND_FADE);
+      const sand = su * su * (3 - 2 * su);            // smoothstep, nie liniowy klif
 
       // POJAWIANIE: 0.26 s miękkiego rozbłysku (scale 0.55 -> 1, jasność 0 -> 1),
       // potem długie, gładkie gaśnięcie do dokładnie zera na końcu życia.
@@ -298,7 +309,7 @@ export class RhythmWheel {
       const ua = this.age[i] / ATTACK;
       const appear = ua >= 1 ? 1 : ua * ua * (3 - 2 * ua);            // smoothstep
       const release = u < 0.5 ? 1 : 1 - (u - 0.5) * 2;                 // 0 na końcu
-      const k = appear * release * release * GAIN * this.gain[i];
+      const k = appear * release * release * sand * GAIN * this.gain[i];
       this.shown[i3] = this.col[i3] * k;
       this.shown[i3 + 1] = this.col[i3 + 1] * k;
       this.shown[i3 + 2] = this.col[i3 + 2] * k;

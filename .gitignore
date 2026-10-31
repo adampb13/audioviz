@@ -9,14 +9,23 @@ node_modules/
 # audio i stem-y: 400+ MB plików binarnych, odtwarzalne z separate.py / analyze_stems.py
 data/*.wav
 data/*.flac
+data/*.mp3
+data/*.m4a
+data/*.ogg
 data/*/*.wav
 data/*/*.flac
 data/*/*.mp3
+data/*/*.m4a
+data/*/*.ogg
 
 # zrzuty z QA/podglądów
 *.png
 viz/out/
 scratch/
+# ...ale znak projektu jest częścią UI (favicon, nagłówek, ekran startowy)
+!viz/logo.png
+!viz/favicon.png
+!viz/icon-180.png
 
 # kalibracja ETA (uczy się z lokalnych przebiegów — maszynowe, nie do repo)
 data/.eta.json

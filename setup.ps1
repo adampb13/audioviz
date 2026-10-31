@@ -12,7 +12,8 @@
     4. dokłada wheel CUDA dla torch, jeśli jest karta NVIDIA (-SkipGpu pomija),
     5. npm install w viz/ (Three.js),
     6. sprawdza, czy audio-separator naprawdę się importuje,
-    7. wypisuje komendę startową.
+    7. sprawdza ffmpeg (potrzebny do pobierania utworów z sieci),
+    8. wypisuje komendę startową.
 
   Skrypt jest idempotentny — można go puszczać wielokrotnie.
 #>
@@ -102,6 +103,7 @@ mods = [
     ('soundfile', 'soundfile'),
     ('numpy', 'numpy'),
     ('scipy', 'scipy'),
+    ('yt_dlp', 'yt-dlp'),
 ]
 bad = []
 for mod, name in mods:
@@ -127,6 +129,17 @@ if (-not $SkipNode) {
             if ($LASTEXITCODE -ne 0) { Fail "npm install nie powiódł się (kod $LASTEXITCODE)." }
         } finally { Pop-Location }
     }
+}
+
+# Pobieranie utworów z sieci: yt-dlp jest w requirements, ale WAV-y składa ffmpeg,
+# który jest osobnym programem — bez niego panel „pobierz z sieci” nie zadziała.
+Step "ffmpeg (pobieranie z sieci)"
+$ff = Get-Command ffmpeg -ErrorAction SilentlyContinue
+if ($ff) {
+    Write-Host "    $(& ffmpeg -version 2>$null | Select-Object -First 1)"
+} else {
+    Write-Host "    !  Brak ffmpeg w PATH — pobrane audio nie da się zamienić na WAV." -ForegroundColor Yellow
+    Write-Host "       winget install Gyan.FFmpeg   (potem otwórz nowy terminal)" -ForegroundColor Yellow
 }
 
 Step "Gotowe"

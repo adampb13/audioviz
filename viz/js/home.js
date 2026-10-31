@@ -25,6 +25,8 @@ const els = {
   jobpane: $("#jobpane"), jpTitle: $("#jp-title"), jpMeta: $("#jp-meta"),
   jpSteps: $("#jp-steps"), jpCancel: $("#jp-cancel"), log: $("#log"),
   toast: $("#toast"), refresh: $("#refresh"), stemsOpen: $("#stems-open"),
+  fsearch: $("#fsearch"), fq: $("#fq"), fgo: $("#fgo"),
+  fresults: $("#fresults"), fhint: $("#fhint"),
   stems: $("#stems"), stemsRows: $("#stems-rows"), stemsSlug: $("#stems-slug"),
 };
 
@@ -57,6 +59,10 @@ const fmtTime = (s) => {
   const m = Math.floor(s / 60), r = Math.round(s % 60);
   return `${m}:${String(r).padStart(2, "0")}`;
 };
+// długość z YouTube (sekundy) w tej samej notacji co reszta panelu
+const fmtLen = (s) => (!s ? "—" : s >= 3600
+  ? `${Math.floor(s / 3600)} h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")} min`
+  : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`);
 // ETA z serwera: „~2 min 10 s" czyta się lepiej niż „2:10" w zdaniu
 const fmtEta = (s) => {
   if (s == null) return "—";
@@ -122,8 +128,22 @@ function paintEnv() {
   const sep = caps.separator
     ? "separator <b>gotowy</b>"
     : 'separator <span class="no">brak</span> · pip install audio-separator';
-  els.env.innerHTML = `python <b>${caps.python || "?"}</b> · librosa <b>${caps.librosa ? "ok" : "brak"}</b> · ${sep}`;
+  // Pobieranie z sieci potrzebuje DWÓCH rzeczy: yt-dlp (ściąga) i ffmpeg (składa WAV).
+  // Lepiej powiedzieć to w nagłówku niż dopiero po kliknięciu „szukaj”.
+  const dlOk = caps.ytdlp && caps.ffmpeg;
+  const dl = dlOk
+    ? "pobieranie <b>ok</b>"
+    : `pobieranie <span class="no">brak</span> · ${caps.ytdlp ? "ffmpeg nie jest w PATH" : "pip install yt-dlp"}`;
+  els.env.innerHTML = `python <b>${caps.python || "?"}</b> · librosa <b>${caps.librosa ? "ok" : "brak"}</b>`
+    + ` · ${sep} · ${dl}`;
   els.sephint.textContent = caps.separator ? "" : "podział na stem'y niedostępny w tym środowisku";
+  if (!dlOk) {
+    els.fq.disabled = true;
+    els.fgo.disabled = true;
+    fhint(caps.ytdlp
+      ? "brak ffmpeg w PATH — bez niego audio z sieci nie da się przekonwertować na WAV"
+      : "brak yt-dlp w środowisku serwera — uv pip install --python .venv/Scripts/python.exe yt-dlp", true);
+  }
 }
 
 // ------------------------------------------------------------------ karty
@@ -311,7 +331,6 @@ function paintJob(job) {
   }
   if (job.id !== activeJobId) {
     activeJobId = job.id;
-    els.jpTitle.textContent = `przygotowanie · ${job.slug}`;
     els.jobpane.classList.add("on");
     els.log.textContent = "";
     els.log.dataset.atBottom = "1";
@@ -319,7 +338,10 @@ function paintJob(job) {
   if (job.status === "queued") {
     els.jpMeta.textContent = `w kolejce (${job.queue_pos}) · szac. ${fmtEta(job.eta_total)}`;
   } else if (job.status === "running") {
-    els.jpMeta.textContent = `${job.elapsed} s · zostało ~${fmtEta(job.eta_left)} (szac.)`;
+    // przy pobieraniu procent jest ważniejszy od szacunku reszty kolejki
+    els.jpMeta.textContent = job.progress != null
+      ? `${job.elapsed} s · pobrano ${Math.round(job.progress)}%`
+      : `${job.elapsed} s · zostało ~${fmtEta(job.eta_left)} (szac.)`;
   } else if (job.status === "done") {
     els.jpMeta.textContent = `gotowe · ${fmtEta(job.elapsed)}`;
     if (!seenDone.has(job.id)) { seenDone.add(job.id); toast(`gotowe: ${job.slug} · ${fmtEta(job.elapsed)}`); }
@@ -328,6 +350,9 @@ function paintJob(job) {
     els.jpMeta.textContent = `${job.status === "error" ? "błąd" : "anulowane"} · ${job.elapsed} s`;
     els.drophint.textContent = DROPHINT_DEFAULT;
   }
+  // tytuł idzie za BIEŻĄCYM krokiem: pobieranie → podział → analiza → uderzenia
+  const curLabel = job.steps?.find((s) => s.key === job.current)?.label;
+  els.jpTitle.textContent = `${curLabel || "przygotowanie"} · ${job.slug}`;
   els.jpSteps.innerHTML = job.steps.map(stepChip).join("");
 
   // log: dopisujemy tylko NOWE linie i trzymamy się dołu, jeśli użytkownik nie odjechał
@@ -506,6 +531,102 @@ $("#stems-send").addEventListener("click", async (e) => {
   } finally {
     btn.disabled = false;
   }
+});
+
+// ------------------------------------------------------------------ pobieranie z sieci
+// Domyślna droga: wyszukanie w YouTube → pobranie przez yt-dlp → ten sam łańcuch
+// na serwerze, co przy wgraniu pliku. Panel jest NAD strefą drag&drop, bo to on
+// jest pierwszym krokiem; ręczny upload został jako alternatywa.
+let searching = false;
+const YT_MAX_DUR = 15 * 60;     // jak YTDL_MAX_DUR w server.py
+
+function fhint(text, bad = false) {
+  els.fhint.textContent = text;
+  els.fhint.classList.toggle("bad", bad);
+}
+
+async function startFetch(r, row, btn) {
+  row.classList.add("on");
+  btn.textContent = "w toku";
+  try {
+    const res = await api("/api/fetch", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: r.url, title: r.title, slug: r.slug }),
+    });
+    lastUpload = res.slug;
+    fhint(`pobieram „${r.title}” — podział i analiza w tej samej kolejce`);
+    toast(`pobieranie: ${r.title} · razem ~${fmtEta(res?.job?.eta_total)}`);
+    tick();
+  } catch (err) {
+    row.classList.remove("on");
+    btn.textContent = "pobierz";
+    toast(err.message, true);
+  }
+}
+
+function renderResults(list, query) {
+  els.fresults.innerHTML = "";
+  if (!list.length) {
+    els.fresults.hidden = true;
+    fhint(`nic nie znaleziono dla „${query}”`, true);
+    return;
+  }
+  els.fresults.hidden = false;
+  for (const r of list) {
+    const row = document.createElement("div");
+    row.className = "frow";
+    const t = document.createElement("div");
+    t.className = "t";
+    const b = document.createElement("b");
+    b.textContent = r.title || r.url;          // tytuł z sieci = textContent, nie HTML
+    const meta = document.createElement("span");
+    meta.textContent = r.uploader || "—";     // długość ma własną kolumnę po prawej
+    t.append(b, meta);
+    const d = document.createElement("span");
+    d.className = "d";
+    d.textContent = r.duration ? fmtLen(r.duration) : "—";
+    const dl = document.createElement("button");
+    dl.type = "button";
+    dl.className = "ghost dl";
+    // limit serwera to 15 min — dłuższe wyniki (składanki, „1 hour loop”) nie
+    // mają sensu, więc lepiej wyłączyć przycisk niż pobierać i dostać błąd
+    const tooLong = r.duration > YT_MAX_DUR;
+    dl.textContent = tooLong ? "za długi" : "pobierz";
+    dl.disabled = tooLong;
+    if (tooLong) dl.title = `limit ${fmtLen(YT_MAX_DUR)} na materiał`;
+    else dl.addEventListener("click", () => startFetch(r, row, dl));
+    row.append(t, d, dl);
+    els.fresults.append(row);
+  }
+  fhint(`${list.length} ${plural(list.length, "wynik", "wyniki", "wyników")} · `
+    + `wybierz „pobierz” — podział i analiza ruszą same`);
+}
+
+async function search(e) {
+  if (e) e.preventDefault();
+  const q = els.fq.value.trim();
+  if (q.length < 2) { fhint("wpisz co najmniej 2 znaki albo wklej link", true); return; }
+  if (searching) return;
+  searching = true;
+  els.fgo.disabled = true;
+  els.fgo.textContent = "szukam…";
+  fhint("szukam w sieci…");
+  try {
+    const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
+    renderResults(res.results || [], q);
+  } catch (err) {
+    els.fresults.hidden = true;
+    fhint(err.message, true);
+  } finally {
+    searching = false;
+    els.fgo.disabled = false;
+    els.fgo.textContent = "szukaj";
+  }
+}
+
+els.fsearch.addEventListener("submit", search);
+els.fq.addEventListener("input", () => {
+  if (!els.fq.value.trim()) { els.fresults.hidden = true; els.fresults.innerHTML = ""; }
 });
 
 // ------------------------------------------------------------------ start

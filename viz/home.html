@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>audioviz — biblioteka utworów</title>
+<link rel="icon" type="image/png" sizes="64x64" href="./favicon.png">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<meta name="theme-color" content="#150c06">
 <style>
   /* Ta strona jest „zapleczem" wizualizacji, więc trzyma jej tonację:
      ciepła czerń, jeden złoty akcent, mono na etykietach. Żadnych nowych
@@ -37,7 +40,11 @@
 
   /* ---------- nagłówek ---------- */
   header.top { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
-  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  /* Znak projektu — ten sam plik co favicon, więc karta przeglądarki i strona
+     mówią tym samym obrazem. Kwadrat, bo źródło jest kwadratowe. */
+  .brand .logo { width: 34px; height: 34px; border-radius: 9px; object-fit: cover;
+    box-shadow: 0 0 0 1px rgba(var(--acc-rgb), .22), 0 6px 18px rgba(0, 0, 0, .5); }
   .brand .mark { font-size: 23px; letter-spacing: -.02em; font-weight: 500; }
   .brand .mark i { font-style: normal; color: var(--acc2); }
   .brand .sub { font: 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .22em;
@@ -47,10 +54,44 @@
   .env b { color: rgba(var(--acc2-rgb), .75); font-weight: 500; }
   .env .no { color: rgba(var(--bad-rgb), .85); }
 
-  /* ---------- sekcja wgrywania ---------- */
+  /* ---------- sekcja pobierania (domyślna droga) ---------- */
   .hero { margin: 30px 0 34px; }
   .hero h1 { font-size: 27px; font-weight: 500; letter-spacing: -.015em; margin: 0 0 7px; }
   .hero p { margin: 0 0 18px; max-width: 62ch; color: rgba(var(--txt-rgb), .62); }
+  .fetch { border: 1px solid rgba(var(--acc-rgb), .3); border-radius: 16px; padding: 15px 16px 13px;
+    background: linear-gradient(180deg, rgba(var(--acc-rgb), .10), rgba(var(--acc-rgb), .03));
+    box-shadow: inset 0 1px 0 rgba(var(--acc2-rgb), .08); }
+  .fetch .fhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 11px; }
+  .fetch .fhead b { font: 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .2em;
+    text-transform: uppercase; color: rgba(var(--acc2-rgb), .9); font-weight: 500; }
+  .fetch .fhead span { font: 10px/1.4 ui-monospace, Consolas, monospace; letter-spacing: .05em;
+    color: rgba(var(--txt-rgb), .38); }
+  .fsearch { display: flex; gap: 9px; }
+  .fsearch input { flex: 1 1 auto; min-width: 0; font: 13.5px/1.4 system-ui, "Segoe UI", sans-serif;
+    color: rgb(var(--txt-rgb)); background: rgba(0, 0, 0, .34); border: 1px solid rgba(var(--acc-rgb), .22);
+    border-radius: 10px; padding: 10px 13px; outline: none; transition: border-color .16s, background .16s; }
+  .fsearch input::placeholder { color: rgba(var(--txt-rgb), .32); }
+  .fsearch input:focus { border-color: rgba(var(--acc2-rgb), .55); background: rgba(0, 0, 0, .46); }
+  .fsearch .primary { padding: 9px 20px; }
+  .fresults { margin-top: 11px; display: grid; gap: 1px; border-top: 1px solid rgba(var(--acc-rgb), .13); }
+  .frow { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;
+    padding: 9px 3px; border-bottom: 1px solid rgba(var(--acc-rgb), .09); }
+  .frow .t { min-width: 0; }
+  .frow .t b { display: block; font-weight: 500; font-size: 13px; color: rgba(var(--txt-rgb), .9);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frow .t span { font: 10px/1.5 ui-monospace, Consolas, monospace; letter-spacing: .04em;
+    color: rgba(var(--txt-rgb), .34); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: block; }
+  .frow .d { font: 10.5px/1 ui-monospace, Consolas, monospace; color: rgba(var(--acc2-rgb), .6);
+    font-variant-numeric: tabular-nums; }
+  .frow .dl { font-size: 11px; padding: 5px 12px; }
+  .frow.on { background: rgba(var(--acc-rgb), .06); }
+  .frow.on .dl { opacity: .5; pointer-events: none; }
+  .fhint { margin-top: 9px; font: 10px/1.5 ui-monospace, Consolas, monospace; letter-spacing: .04em;
+    color: rgba(var(--txt-rgb), .34); }
+  .fhint.bad { color: rgba(var(--bad-rgb), .85); }
+  .sub { margin: 20px 0 9px; font: 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .18em;
+    text-transform: uppercase; color: rgba(var(--txt-rgb), .3); }
   .drop {
     position: relative; border: 1px dashed rgba(var(--acc-rgb), .32); border-radius: 16px;
     padding: 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
@@ -217,6 +258,7 @@
 <div class="wrap">
   <header class="top">
     <div class="brand">
+      <img class="logo" src="./logo.png" alt="audioviz" width="34" height="34" />
       <span class="mark">audio<i>viz</i></span>
       <span class="sub">biblioteka utworów</span>
     </div>
@@ -224,9 +266,24 @@
   </header>
 
   <section class="hero">
-    <h1>Wgraj utwór i przygotuj go do wizualizacji</h1>
-    <p>Podział na cztery ścieżki, analiza widma i rytmu, detekcja uderzeń.</p>
+    <h1>Pobierz utwór i przygotuj go do wizualizacji</h1>
+    <p>Podział na cztery ścieżki, analiza widma i rytmu, detekcja uderzeń — jednym kliknięciem.</p>
 
+    <div class="fetch">
+      <div class="fhead">
+        <b>pobierz z sieci</b>
+        <span>znajdź utwór, wybierz wynik — pobranie, podział i analiza ruszają same</span>
+      </div>
+      <form class="fsearch" id="fsearch" autocomplete="off">
+        <input type="search" id="fq" spellcheck="false"
+               placeholder="tytuł, wykonawca albo link do utworu…" aria-label="szukaj utworu w sieci" />
+        <button class="primary" id="fgo" type="submit">szukaj</button>
+      </form>
+      <div class="fresults" id="fresults" hidden></div>
+      <div class="fhint" id="fhint">yt-dlp + ffmpeg · limit 15 min na materiał</div>
+    </div>
+
+    <div class="sub">albo wgraj plik z dysku</div>
     <div class="drop" id="drop" role="button" tabindex="0" aria-label="wgraj plik audio">
       <button class="primary" id="pick" type="button">wybierz plik</button>
       <span class="hint" id="drophint">albo przeciągnij tutaj · wav, mp3, flac, m4a, ogg</span>

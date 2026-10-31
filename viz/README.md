@@ -28,6 +28,8 @@ uruchomiony — czyli z `.venv`, gdzie jest librosa.
   Kolor sfery zależy od energii całości, a kręgi na piasku — od uderzeń
   (`events.onsets`) ścieżki „inne”, więc obie ścieżki muszą być w analizie.
 - `?demo&t=123` — start bez gestu użytkownika, od 123 s (zegar własny, bez audio).
+- W panelu H kropka **•** przy wartości (prawa kolumna) znaczy „ten parametr
+  moderuje scenę”; pełna lista jest w `DRIVES` w `hud.js`, reszta to podgląd.
 - `Spacja` — pauza · `H` — panel HUD · `Esc` — panel ustawień (otwiera i zamyka) ·
   `#err` — błędy JS ·
   `window.__viz` — sonda stanu (`t, energy, dropEnv, dropLog, bursts, fpsP95, calls,
@@ -47,11 +49,17 @@ Zielona odznaka „gotowy” = `analysis.json` ma klatki wszystkich czterech
 
 | krok | co robi | wynik |
 |---|---|---|
+| pobranie | panel „pobierz z sieci” (`POST /api/fetch`) — yt-dlp + ffmpeg | `data/<slug>.wav` |
 | źródło | wgranie pliku (`PUT /api/upload`) | `data/<slug>.<ext>` |
 | stem'y | `separate.py` (Demucs) | `data/<slug>/{wokal,bas,bebny,inne}.wav` |
 | analiza | `analyze_stems.py` | `data/<slug>/analysis.json` |
 | uderzenia | `detect_hits.py` | `events.hits` w `analysis.json` |
 
+- Panel pobierania jest NAD wgrywaniem, bo to domyślna droga: wpisz tytuł (albo
+  wklej link), wybierz wynik i reszta idzie sama — `fetch` → `separate` →
+  `analyze` → `hits` w jednej kolejce. Postęp pobierania (procent) leci do tego
+  samego panelu logów; ETA podziału pojawia się dopiero po pobraniu, bo wcześniej
+  nie znamy długości materiału. Limit 15 min na utwór.
 - „przygotuj” uruchamia **brakujące** kroki po kolei; analiza bez detekcji
   uderzeń nie daje utworu, którego da się puścić, więc łańcuch dociąga się sam.
 - Brak `audio-separator` w środowisku nie blokuje pracy: „wgraj stem'y” pozwala
@@ -60,6 +68,9 @@ Zielona odznaka „gotowy” = `analysis.json` ma klatki wszystkich czterech
 - Jedna kolejka zadań, jeden worker — separacja i analiza zjadają cały CPU,
   równoległe uruchomienia tylko dusiłyby się nawzajem. Log leci na żywo do
   panelu w prawym dolnym rogu (z anulowaniem).
+- Znak projektu (`viz/logo.png`, z tego samego kadru `viz/favicon.png` i
+  `icon-180.png`) jest w karcie przeglądarki obu stron, w nagłówku biblioteki
+  i nad przyciskiem Start — jedna tożsamość wszędzie, zamiast emoji w tytule.
 - `analysis.json` to ~26 MB na utwór, więc lista czyta tylko podsumowanie:
   jedno parsowanie na wersję pliku (mtime+rozmiar), cache w pamięci **i** w
   `data/<slug>/analysis.meta.json`, żeby po restarcie serwera nie czytać 26 MB
@@ -73,6 +84,8 @@ API (wszystko JSON, jeden proces):
 | `PUT` | `/api/upload?name=x.wav` | surowe bajty pliku → nowy utwór |
 | `PUT` | `/api/stems/<slug>?stem=wokal&ext=.wav` | pojedynczy stem |
 | `POST` | `/api/run` `{slug, prepare:true}` lub `{slug, steps:[…]}` | uruchom skrypty |
+| `GET` | `/api/search?q=…` | wyszukiwanie w YouTube przez yt-dlp (same metadane, 8 wyników; link też działa) |
+| `POST` | `/api/fetch` `{url, title}` | pobierz audio i od razu puść cały łańcuch |
 | `GET` | `/api/job/<id>` | log zadania (200 ostatnich linii) |
 | `POST` | `/api/cancel?id=<id>` | zatrzymanie zadania |
 | `DELETE` | `/api/tracks/<slug>` + nagłówek `X-Confirm` | usuń utwór wraz z katalogiem |
@@ -89,7 +102,7 @@ każdą parę „ścieżka → obiekt” testuje się bez grzebania w kodzie:
 | `wokal` | wstęga zjeżdża do cienkiej nici (szerokość 0.16 m, bez falowania) |
 | `bas` | kula wygładza się do idealnej kuli, zero struktury i zero żebra na bit, zero rozbłysku na drop |
 | `bebny` | zero fal na ziemi i zero pulsu sfery (już puszczone fale dożywają) |
-| `inne` | **cząsteczki rytmu** — na każdy akcent (`events.onsets`) zapala się iskra w losowym miejscu sceny (od pierwszego planu po horyzont): przez 0.26 s rozbłyska i rośnie, potem spokojnie opada i gaśnie, a dotknąwszy piasku dogasa w miejscu. Barwa z rejestru widma (`centroid_hz`, ciemny żar ↔ jasne złoto), siła akcentu → jasność i rozmiar. Emisja bramkowana do ~1.5 zdarzenia/s, więc widać takt, nie młyn. Wchodzi też w energię całości → rozmiar i kolor sfery |
+| `inne` | **cząsteczki rytmu** — na każdy akcent (`events.onsets`) zapala się iskra w losowym miejscu sceny: przez 0.26 s rozbłyska i rośnie, potem spokojnie opada i **gaśnie z czasem** (życie 2.6–4.6 s). Iskry startują na CAŁEJ szerokości kadru — połowa szerokości liczona z FOV kamery (`tan(fov/2)·aspect`) z 12% zapasem, rozkład `u^0.62` wypycha je na boki; nie ma „niewidzialnej podłogi”, na której by się zbierały (przy piasku tylko przygasają przez `smoothstep(0…0.55 m)`, żeby nie przeciąć ziemi widoczną linią). Barwa z rejestru widma (`centroid_hz`, ciemny żar ↔ jasne złoto), siła akcentu → jasność i rozmiar. Emisja bramkowana do ~1.5 zdarzenia/s, więc widać takt, nie młyn. Wchodzi też w energię całości → rozmiar i kolor sfery |
 
 Energia to mix stemów (`0.45 bas + 0.30 inne + 0.25 bebny`), więc wyciszenie ścieżki
 odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena naprawdę cicha.
@@ -112,7 +125,7 @@ odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena n
 | `settings.js` | panel lewego dolnego rogu: ścieżki (wokal / bas / **bębny** / inne) z podpisem, co każda rysuje w scenie, **głośność ogólna** (suwak 0–100%, `el.volume` wszystkich czterech elementów) i **preset barwy**. Trzyma `gain[id] ∈ {0,1}` czytany w pętli i woła `onToggle` / `onVolume` / `onPreset`. Bez zależności od sceny, żeby dało się go testować osobno |
 | `palette.js` | cztery **presety barwy całej sceny** (złoty = domyślny/obecny, neonowy, niebieski, zielony). Jeden preset przestawia niebo, mgłę, ziemię, pasma gór, wstęgę, żar kuli, kręgi, gwiazdy, tint gradingu ORAZ akcenty UI przez zmienne CSS `--acc/--acc2/--ink`. Warstwy dostają kolory przez własne `setPalette()` — same zapisy uniformów, więc przełączanie w trakcie grania jest darmowe (bez rekompilacji shaderów) |
 | `postfx.js` | RenderPass → UnrealBloom (0.55 / 0.75 / próg 0.6) → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
-| `rhythm.js` | **kręgi uderzeń** (`RhythmWheel`) — pełny obraz RYTMU ścieżki „inne". Jedno uderzenie `events.onsets` = jeden krąg: pula 12 w JEDNYM `InstancedMesh` (`MeshBasicMaterial` + `instanceColor`, additive, `depthWrite: false`), życie 2.3 s, promień `1.1 → 8.6 m` skalowany siłą uderzenia (`0.45 + 0.55·s`), jasność wygasa `(1-u)² × 1.12`, barwa z rejestru widma (`centroid_hz` na log2 między p10 a p95): niski = ciemny żar, środek = złoto, wysoki = złoto rozjaśnione do 45% bieli. Promień rośnie z wyhamowaniem (`1 - (1-u)^2.2`), więc krąg wychodzi szybko i spokojnie dogasa. Zero własnych shaderów, zero alokacji w pętli, jeden draw call. W panelu H `inne.onset` i `centroid_hz` opisują pierścień |
+| `rhythm.js` | **cząsteczki rytmu** (`RhythmWheel`) — pełny obraz RYTMU ścieżki „inne". Jedno uderzenie `events.onsets` = 1–3 iskry: pula 160 w JEDNYM `InstancedMesh` (`MeshBasicMaterial` + `instanceColor`, additive, `depthWrite: false`), każda to `PlaneGeometry` z teksturą miękkiej kropki (64×64 radialny gradient w `CanvasTexture`) i billboard obrócony kwaternionem kamery. Pozycja: `z` w `[16, −58] m`, `depth = CAM_Z − z`, `halfW = depth · tan(fov/2) · aspect · 1.12`, `x = ±u^0.62 · halfW` (boki, nie środek), `y` 0.35–3 m nad piaskiem. Koperta: 0.26 s rozbłysku i wzrostu, potem `release²` przez życie 2.6–4.6 s; opadanie 0.30–0.85 m/s **bez lądowania** (brak zatrzymania na gruncie — iskra gaśnie z czasem, przy piasku tylko przygasa). Rozmiar i jasność maleją z głębią (`clamp(depth/CAM_Z, 0.35, 2.5)` i `1 − 0.28·haze`), `GAIN 1.30`. Zero własnych shaderów, zero alokacji w pętli (kwaternion i macierz tymczasowe), jeden draw call. W panelu H `inne.onset_strength`, `inne.onset_norm` i `inne.centroid_hz` mają kropkę • przy wartości |
 | `hud.js` | panel **H**: **wszystkie parametry ramkowe wszystkich czterech ścieżek** (21 na ścieżkę: rms, rms_norm, rms_db, peak, zcr, centroid, bandwidth, rolloff, flatness, spectral_contrast ×7, dominant, mel_db ×32, mfcc ×13, chroma ×12, chroma_active, onset_strength, onset_norm, tempo, pitch_hz, pitch_midi, voiced_prob; bębny nie mają pól `pitch*`, pusta grupa nie trafia do panelu) — dwie kolumny flex (wokal+bas+bębny / inne+scena), jeden scrollbar, nagłówek sekcji zwija ją klikiem. Definicja pól jest **jedna** (`stemParams` w data.js), więc nowe pole w analizie pojawia się w panelu bez zmian w hud.js. Skala słupka: stała dla wielkości unormowanych (`ABS_RANGE`: 0–1, dB, midi), inaczej p98 wartości bezwzględnej — jeden głośny moment nie ściska skali. Druga kolumna to blok **scena**: `t` vs `audio.currentTime` i ich różnica (rozjazd zegarów), `seek`, sekcja, stan, fps/klatka/px/draw calls/trójkąty, `uGlow/uStruct/uWobble/pulse/skala/promień`, **surowe próbki → obwiednie** z ▲▼ (widać, czy scena goni dźwięk), stan kręgów, liczniki zdarzeń, utwór/miks. Animacja wyłącznie na `transform` (zero reflow), słupki 30×/s, liczby 4×/s |
 | `serve.py` | statyczny serwer na :8080 (root = repo) |
 
