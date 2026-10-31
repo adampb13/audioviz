@@ -1,0 +1,7 @@
+"""Zależności samych testów — nie trafiają do requirements.txt.
+
+Potok działa na numpy/librosa/yt-dlp z requirements.txt; tu jest tylko runner.
+    uv pip install -r requirements-dev.txt
+    .venv/Scripts/python.exe -m pytest -q
+"""
+pytest==9.2.0

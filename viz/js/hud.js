@@ -64,7 +64,8 @@ const UNIT = {
   centroid_hz: "Hz", bandwidth_hz: "Hz", rolloff_hz: "Hz", dominant_hz: "Hz",
   pitch_hz: "Hz",
   tempo_local_bpm: "bpm",
-  pitch_midi: "midi",
+  // pitch_midi bez jednostki: etykieta wiersza już mówi "midi", a "58.2 midi"
+  // nie mieściło się w kolumnie 54px i zawijało się na drugą linię
 };
 
 // Próbkowanie jednego parametru w czasie t: out[0..k-1]. Zwraca k.

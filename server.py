@@ -73,12 +73,16 @@ ETA_PATH = DATA / ".eta.json"
 # ETA per sprzęt: separator na GPU jest ~6× szybszy (12 s materiału: 13 s vs 82 s),
 # więc jeden zestaw stałych dla obu przypadków zawsze kłamał w którąś stronę.
 # `separate` na GPU ≈ 6 s narzutu (ładowanie sieci) + 0.62 s na sekundę materiału.
+# Analiza to czysty CPU (numpy/librosa), więc GPU jej nie przyspiesza — te same liczby.
+# Punkt wyjścia zmierzony po przejściu na pasmowy Viterbi i 4 procesy: 225 s utworu
+# = 21 s analizy na 16 rdzeniach (wcześniej 178 s, czyli ~4.5x szybciej).
 ETA_DEFAULTS = {
-    "gpu": {"separate": (6.0, 0.62), "analyze": (2.5, 0.28), "hits": (2.0, 0.02),
+    "gpu": {"separate": (6.0, 0.62), "analyze": (10.0, 0.09), "hits": (2.0, 0.02),
             "fetch": (18.0, 0.05)},
-    "cpu": {"separate": (50.0, 2.2), "analyze": (2.5, 0.28), "hits": (2.0, 0.02),
+    "cpu": {"separate": (50.0, 2.2), "analyze": (10.0, 0.09), "hits": (2.0, 0.02),
             "fetch": (18.0, 0.05)},
 }
+ETA_VERSION = 4      # podbij, gdy zmienia się czas kroku: stare pomiary dotyczą innego kodu
 ETA_MIN_SAMPLES = 3
 ETA_LOCK = threading.Lock()
 _DUR_CACHE: dict[str, float] = {}
@@ -136,8 +140,12 @@ def _eta_model() -> dict:
     try:
         raw = json.loads(ETA_PATH.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 — brak pliku to normalny start
-        return {}
-    return raw if isinstance(raw, dict) else {}
+        return {"version": ETA_VERSION}
+    if not isinstance(raw, dict) or raw.get("version") != ETA_VERSION:
+        # Pomiary z innej wersji potoku potrafią zafałszować ETA o rzędy wielkości
+        # (np. po przyspieszeniu analizy 4x) — zaczynamy od zera.
+        return {"version": ETA_VERSION}
+    return raw
 
 
 ETA_MIN_DUR = 20.0   # krótsze klipy to sam narzut (padding do segmentu) — fałszują nachylenie
@@ -193,6 +201,7 @@ def record_eta(step: str, duration: float, elapsed: float) -> None:
     """Zapisz pomiar, żeby kolejne ETA było liczone z rzeczywistości, nie z sufitu."""
     with ETA_LOCK:
         model = _eta_model()
+        model["version"] = ETA_VERSION
         key = f"{step}@{_device()}"
         arr = list(model.get(key) or [])
         arr.append([round(float(duration), 2), round(float(elapsed), 2)])
@@ -1133,16 +1142,57 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._json({"ok": True, "removed": removed})
 
 
+class _Server(http.server.ThreadingHTTPServer):
+    """Gniazdo z wyłączonym SO_REUSEADDR na Windows.
+
+    Windows domyślnie pozwala zbindować port, na którym wisi już „martwe” gniazdo
+    po procesie ubitym przez taskkill: serwer wstaje, wypisuje adres, a klient
+    dostaje puste połączenia (curl: 000), bo jądro kieruje ruch do gniazda,
+    którego nikt nie odbiera. `allow_reuse_address = False` zamienia to na
+    czytelny błąd „port zajęty” zamiast cichego zawieszenia.
+    """
+
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
+
+
+def _self_check(port: int) -> None:
+    """Pyta własny port, czy naprawdę odpowiada.
+
+    Bez tego jedyny objaw „zombie portu” to puste 000 w przeglądarce — a to
+    wysyła człowieka na polowanie na błąd w kodzie, którego tam nie ma.
+    """
+    import urllib.request
+
+    deadline = time.time() + 4.0
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/state", timeout=1.0) as r:
+                if r.status == 200:
+                    return
+        except Exception:
+            time.sleep(0.2)
+    print("  UWAGA: nikt nie odpowiada na tym porcie — najpewniej trzyma go gniazdo\n"
+          "  po ubitym procesie. Sprawdź: netstat -ano | findstr :%d i zabij PID,\n"
+          "  albo uruchom na innym porcie: python server.py %d" % (port, port + 1), flush=True)
+
+
 def run(port: int = 8080) -> None:
     DATA.mkdir(exist_ok=True)
     probe_caps()
     threading.Thread(target=_worker, daemon=True, name="jobs").start()
-    with http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler) as srv:
-        srv.daemon_threads = True
+    try:
+        srv = _Server(("127.0.0.1", port), Handler)
+    except OSError as e:
+        print(f"  port {port} zajęty ({e.strerror or e}) — uruchom na innym porcie: "
+              f"python server.py {port + 1}", flush=True)
+        return
+    with srv:
         print(f"audioviz: http://127.0.0.1:{port}/viz/home.html", flush=True)
         print(f"  root: {ROOT}", flush=True)
         print(f"  python: {CAPS.get('python')} | librosa: {CAPS.get('librosa')} | "
               f"separator: {CAPS.get('separator')}", flush=True)
+        threading.Thread(target=_self_check, args=(port,), daemon=True).start()
         try:
             srv.serve_forever()
         except KeyboardInterrupt:

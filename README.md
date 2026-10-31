@@ -71,6 +71,41 @@ uruchomieniu). `--model htdemucs_ft.yaml` daje czystsze stem'y, ale na CPU trwa
 ~3× dłużej (zmierzone: 12 s materiału → 77 s vs 253 s); na GPU różnica jest
 nieistotna, więc można spokojnie sięgnąć po `_ft`.
 
+### Szybkość analizy
+
+Analiza była wolna z jednego powodu: `librosa.pyin` liczy Viterbi na macierzy
+przejść o wymiarze „liczba stanów × liczba stanów” (~900 × 900 dla zakresu
+C1–C6) i robi to dla czterech stemów. Zmierzone: **178 s** dla utworu 259 s,
+z czego ~80% to sam Viterbi.
+
+Dwie zmiany, obie w `analyze_stems.py` + `fast_viterbi.py`:
+
+1. **Viterbi pasmowy.** W macierzy przejść `transition_local(window="triangle")`
+   realne są tylko przekątne w pasmie ±kilku stanów, reszta to `log(1e-308)`.
+   Podmieniamy `librosa.sequence._viterbi` na wersję pasmową (numba, pętla po
+   pasmie zamiast po pełnej macierzy). Wynik jest **identyczny** z oryginałem —
+   pilnuje tego `tests/test_fast_viterbi.py` (porównanie pełnej ścieżki stanów
+   i log-prawdopodobieństwa na macierzy w formacie librysy). Podmiana działa
+   tylko dla przetestowanych wersji librysy; na nieznanej wersji zostaje oryginał.
+2. **Cztery procesy zamiast wątków.** Stemy liczą się równolegle w osobnych
+   procesach (`--workers`, domyślnie 4), a każdy dostaje `cpu // workers` wątków
+   BLAS/numba (`threadpoolctl`). Wcześniej 16 wątków na jednym procesie
+   dławiło się na barierach numby i dawało ~1.2× zamiast 4×.
+
+Efekt (ten sam plik `analysis.json`, ta sama scena):
+
+| | przed | po |
+|---|---|---|
+| analiza utworu 259 s (`analyze_stems.py`) | 178 s | **42 s** (4.2×) |
+| krok analizy w serwerze, utwór 225 s | — | **21 s** |
+| cały przebieg „pobierz z sieci → gotowe” | — | **~50 s** |
+
+Różnice w `analysis.json` po przyspieszeniu to wyłącznie szum zaokrągleń
+(float32 w mel/MFCC, maxdiff 0.01); `pitch` i `onsets` są identyczne.
+
+`analyze_stems.py --workers N` pozwala zejść do 1 (debug) albo podbić, jeśli
+masz więcej rdzeni niż 4 — powyżej liczby rdzeni nic nie zyskasz.
+
 ### Pobieranie z sieci (domyślna droga w bibliotece)
 
 Na stronie głównej, nad strefą wgrywania, jest panel „pobierz z sieci": wpisujesz
@@ -87,15 +122,31 @@ Wgranie pliku w bibliotece od razu uruchamia podział i analizę (bez klikania),
 z logami na żywo i szacowanym czasem każdego kroku. ETA liczy się z modelu
 `czas ≈ a + b · długość` uczonego na zmierzonych przebiegach (`data/.eta.json`,
 osobno dla GPU i CPU),
-a po każdym kroku jest korygowana o realne tempo tego zadania.
+a po każdym kroku jest korygowana o realne tempo tego zadania. Pomiary noszą
+znacznik wersji potoku (`ETA_VERSION` w `server.py`): po zmianie czasu kroku
+stare próbki są odrzucane, żeby ETA nie kłamała o rząd wielkości.
+
+## Testy
+
+```powershell
+uv pip install -r requirements-dev.txt
+.venv/Scripts/python.exe -m pytest -q      # 27 passed, ~6 s, bez sieci i bez GPU
+```
+
+Testy pilnują trzech rzeczy, które łatwo zepsuć przy refaktorze: równoważności
+pasmowego Viterbi z librysą, modelu ETA (wersjonowanie próbek, dopasowanie po
+trzech pomiarach, pomijanie klipów krótszych niż `ETA_MIN_DUR`) i blokady
+adresów lokalnych w `_check_url` (ochrona przed SSRF w `/api/fetch`).
 
 ## Struktura
 
 ```
 server.py          # serwer statyczny + API + kolejka zadań (stdlib, :8080)
 separate.py        # Demucs: 4 stem'y
-analyze_stems.py   # analiza stemów -> analysis.json
+analyze_stems.py   # analiza stemów -> analysis.json (4 procesy, pasmowy Viterbi)
+fast_viterbi.py    # podmiana librosa._viterbi na wersję pasmową (numba)
 detect_hits.py     # detekcja uderzeń (używane przez analyze_stems)
 viz/               # scena Three.js (index.html, home.html, js/, logo.png, favicon.png)
+tests/             # pytest: Viterbi, ETA, walidacja URL
 data/<utwór>/      # źródło + stem'y + analysis.json (pliki audio poza repo)
 ```

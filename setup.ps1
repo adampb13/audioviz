@@ -11,7 +11,8 @@
        audio-separator, onnxruntime, torchaudio, librosa, ...),
     4. dokłada wheel CUDA dla torch, jeśli jest karta NVIDIA (-SkipGpu pomija),
     5. npm install w viz/ (Three.js),
-    6. sprawdza, czy audio-separator naprawdę się importuje,
+    6. sprawdza, czy audio-separator naprawdę się importuje (oraz numba,
+       bez której pasmowy Viterbi w analizie nie ruszy),
     7. sprawdza ffmpeg (potrzebny do pobierania utworów z sieci),
     8. wypisuje komendę startową.
 
@@ -104,6 +105,8 @@ mods = [
     ('numpy', 'numpy'),
     ('scipy', 'scipy'),
     ('yt_dlp', 'yt-dlp'),
+    ('numba', 'numba'),
+    ('threadpoolctl', 'threadpoolctl'),
 ]
 bad = []
 for mod, name in mods:

@@ -14,12 +14,16 @@ Użycie (z korzenia repo):
 
 import argparse
 import json
+import os
 import time
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import librosa
+
+import fast_viterbi
 
 STEMS = ["wokal", "bas", "bebny", "inne"]
 
@@ -241,11 +245,34 @@ def serialize_stem(feats, events, summary, N, do_pitch):
     )
 
 
+def _stem_worker(job):
+    """Jeden stem w osobnym procesie (spawn-safe: argumenty to tylko proste typy).
+
+    Wątki: procesy dzielą rdzenie, więc każdy dostaje `cpu // workers` wątków.
+    Bez tego cztery procesy po 16 wątków (numba + BLAS) wzajemnie się dusiły
+    i całość była ~2x wolniejsza niż na jednym rdzeniu per proces.
+    """
+    name, path, do_pitch, threads = job
+    import numba
+    import threadpoolctl
+
+    prev = numba.get_num_threads()
+    numba.set_num_threads(threads)
+    fast_viterbi.install()
+    try:
+        with threadpoolctl.threadpool_limits(threads):
+            return name, analyze_stem(name, Path(path), do_pitch=do_pitch)
+    finally:
+        numba.set_num_threads(prev)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", default="data/blindinglights")
     ap.add_argument("--out", default=None, help="domyślnie <data-dir>/analysis.json")
     ap.add_argument("--no-pitch", action="store_true", help="pomiń pyin (dużo szybsze)")
+    ap.add_argument("--workers", type=int, default=0,
+                    help="procesy na stem (0 = auto: po jednym na stem, max 4, min 1)")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -256,9 +283,22 @@ def main():
         raise SystemExit(f"Brak plików: {missing}")
 
     t0 = time.time()
+    workers = args.workers or min(len(STEMS), max(1, os.cpu_count() or 1))
+    threads = max(1, (os.cpu_count() or 1) // max(1, workers))
+    fast = fast_viterbi.install()
+    log(f"Pitch: {'szybki Viterbi (pasmowy)' if fast else 'librosa (pełna macierz)'} | "
+        f"procesy: {workers} × {threads} wątków")
+
+    jobs = [(s, str(paths[s]), not args.no_pitch, threads) for s in STEMS]
     results = {}
-    for s in STEMS:
-        results[s] = analyze_stem(s, paths[s], do_pitch=not args.no_pitch)
+    if workers > 1:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            for name, res in pool.map(_stem_worker, jobs):
+                results[name] = res
+    else:
+        for job in jobs:
+            name, res = _stem_worker(job)
+            results[name] = res
 
     # Wspólna oś czasu: najkrótsza seria określa N
     N = min(f["T"] for f, _, _ in results.values())
@@ -281,7 +321,7 @@ def main():
 
     payload = dict(
         meta=dict(
-            song="blindinglights",
+            song=data_dir.name,
             generated_at=datetime.now(timezone.utc).isoformat(),
             librosa_version=librosa.__version__,
             sample_rate=SR, hop_length=HOP, n_fft=N_FFT,
