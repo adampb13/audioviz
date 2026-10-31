@@ -403,13 +403,23 @@ def scan_tracks() -> list[dict]:
             t["stems"] = [s for s in STEMS if any((p / f"{s}{e}").is_file() for e in AUDIO_EXT)]
             aj = p / "analysis.json"
             if aj.is_file():
-                t["analysis"] = analysis_summary(aj)
+                try:
+                    t["analysis"] = analysis_summary(aj)
+                except FileNotFoundError:
+                    pass      # rmtree() zdążył skasować plik w trakcie skanu
         elif p.suffix.lower() in AUDIO_EXT:
+            # Plik może zniknąć między iterdir() a stat(): DELETE /api/tracks/<slug>
+            # kasuje źródło, a UI pyta o /api/state co ~2 s. Bez tego wyjątku
+            # wątek odpowiedzi kończył się tracebackiem FileNotFoundError.
+            try:
+                st = p.stat()
+            except FileNotFoundError:
+                continue
             t = entry(p.stem)
             t["source"] = {
                 "file": p.name,
-                "bytes": p.stat().st_size,
-                "pretty": human_bytes(p.stat().st_size),
+                "bytes": st.st_size,
+                "pretty": human_bytes(st.st_size),
             }
 
     out = []
