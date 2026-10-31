@@ -7,6 +7,11 @@ Użycie (z korzenia repo):
     .venv/Scripts/python.exe separate.py data/familyties.wav
     .venv/Scripts/python.exe separate.py data/familyties.wav --model htdemucs_ft.yaml
 
+Model: `htdemucs.yaml` (1 sieć) jest domyślny — na CPU ~3-4× szybszy od
+`htdemucs_ft.yaml` (ensemble 4 sieci: 253 s vs 77 s dla 12 s materiału), a dla
+wizualizacji różnica w jakości stemów jest nieistotna. Fine-tuned zostaje dla
+tych, którym zależy na czystości podkładów.
+
 Wymaga audio-separator + onnxruntime + torchaudio (patrz requirements.txt).
 
 Nazwy plików: biblioteka audio-separator zapisuje `<baza>_(Vocals)_wokal.wav`
@@ -21,7 +26,7 @@ import sys
 from pathlib import Path
 
 STEM_KEYS = ("wokal", "bas", "bebny", "inne")
-MODEL = "htdemucs_ft.yaml"
+MODEL = "htdemucs.yaml"
 
 
 def process_audio(file_path: str | Path, model_name: str = MODEL) -> int:

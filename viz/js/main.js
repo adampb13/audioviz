@@ -177,8 +177,27 @@ if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
-// Uderzenia „inne" — osobny kursor: rytm tej ścieżki jedzie na kręgi na piasku.
+// Uderzenia „inne" — osobny kursor: rytm tej ścieżki jedzie na cząsteczki.
+// Sam kursor podaje KAŻDY onset; bramkę (próg siły, refrakcja, blokada na takt)
+// trzyma rhythm.js — inaczej 4-8 zdarzeń/s dawało młyn bez czytelnego pulsu.
 const oOnsets = new EventCursor(track.otherOnsetT, track.otherOnsetS);
+// Progi bramki dobieramy do materiału (gęsty vs rzadki), zanim ruszy pierwsza
+// klatka. Tempo siatki = MEDIANA tempa lokalnego: chwilowe BPM skacze (120→171
+// w kilka sekund), więc siatka na nim dryfowałaby i „na takt" przestało cokolwiek
+// znaczyć.
+const gridBpm = (() => {
+  const a = track.tempo;
+  if (!a || !a.length) return 120;
+  const v = [];
+  for (let i = 0; i < a.length; i += 4) {
+    const b = a[i];
+    if (b > 40 && b < 220) v.push(b);
+  }
+  if (!v.length) return 120;
+  v.sort((x, y) => x - y);
+  return v[v.length >> 1];
+})();
+wheel.calibrate(track.otherOnsetT, track.otherOnsetS, track.duration, gridBpm);
 let lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
@@ -225,13 +244,14 @@ function restartTrack() {
 const S = {
   vRms: 0, vProb: 0, vMidi: 60, vCent: 0,
   bRms: 0, bCent: 0,
-  dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120,
+  dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120, dPeak: 0,
   energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
-// KORONA = jeden słupek na UDERZENIE ścieżki „inne" (mapowanie w README):
-//   wysokość ← siła uderzenia z `events.onsets`
-//   kolor    ← `centroid_hz` w chwili uderzenia (jasne widmo = biały żar)
+// CZĄSTECZKI = UDERZENIE ścieżki „inne" (mapowanie w README):
+//   liczba i rozmiar ← siła uderzenia z `events.onsets`
+//   kolor            ← `centroid_hz` w chwili uderzenia (jasne widmo = jaśniejsze złoto)
+//   Bramka w rhythm.js przepuszcza ~2-4 zdarzenia/s (akcenty + uderzenia na takt).
 const OTHER_LOUD = 0.10;   // poniżej tej głośności „inne" praktycznie milczy
 const OTHER_FULL = 0.55;   // górna skala obwiedni na panelu H
 
@@ -410,6 +430,9 @@ function frame() {
   S.bRms = damp(S.bRms, bRmsT, bRmsT > S.bRms ? 25.0 : 5.0, dt);
   S.bCent = damp(S.bCent, bCentT, 5.0, dt);
   S.dRms = damp(S.dRms, dRmsT, 7.7, dt);
+  // szczyt bębnów z wolno opadającym ogonem (τ≈2.5 s) = poziom odniesienia dla progu
+  // akcentu; bez niego każdy transient dostawał falę i ziemia stawała się mgłą
+  S.dPeak = Math.max(S.dRms, S.dPeak * Math.exp(-dt / 2.5));
   S.oRms = damp(S.oRms, oRmsT, 7.7, dt);
   // wolna obwiednia głośności „inne” — steruje jasnością kuli, więc nie może
   // podskakiwać na każdą nutę (7.7/s dawało migotanie)
@@ -423,24 +446,28 @@ function frame() {
   S.dropEnv = damp(S.dropEnv, energyT, 2.5, dt);
   S.beatPulse *= Math.exp(-dt * 3.0);
 
-  // uderzenia w bębny: fala na ziemi + JEDEN puls sfery, nic więcej
+  // uderzenia w bębny: fala na ziemi + JEDEN puls sfery, nic więcej.
+  // Bramka rytmiczna, nie „każdy transient": falę dostaje tylko akcent (≥45% szczytu)
+  // i nie częściej niż co pół taktu. Ghost note'y i podwójne uderzenia w jednej
+  // ósemce dawały 27 pierścieni naraz — obraz czytał się jak mgła, nie jak puls.
   onsets.poll(t, (_t0, s) => {
     S.onsetsFired++;
     if (!g.bebny) return;              // wyciszone „bebny” = zero fal i zero pulsu
-    if (s < 0.02) return;              // próg tylko na cyfrową ciszę — każdy transient = fala
-    if (t - lastWaveT < 0.05) return;  // dedupe 50 ms (detektor ma rozdzielczość 16.7 ms)
-    lastWaveT = t;
+    if (s < 0.02) return;              // cyfrowa cisza nigdy nie jest uderzeniem
     const sn = clamp(s, 0, 1);
-    // siła -> amplituda i życie: ghost note = mały krótki pierścień, akcent = duży, 2.6 s
-    ground.pushWave(t, 0.10 + sn * 0.12, 9, 2.6 + sn * 3.4); // amp ≤ 0.22, zasięg 23-54 m
+    const beat = 60 / clamp(S.tempo || 120, 55, 190);
+    if (t - lastWaveT < Math.max(0.18, beat * 0.5)) return;   // max 2 fale na takt
+    if (sn < S.dPeak * 0.45) return;                          // tylko akcenty
+    lastWaveT = t;
+    // siła -> amplituda i życie: słabszy akcent = mniejszy i krótszy pierścień
+    ground.pushWave(t, 0.12 + sn * 0.10, 9, 2.2 + sn * 1.6); // zasięg ~20-34 m, życie 2.2-3.8 s
     S.wavesFired++;
     S.beatPulse = Math.max(S.beatPulse, 0.50 + sn * 0.50); // sfera pulsuje raz, na ten sam atak
   });
 
-  // RYTM „inne": kręgi jadą WYŁĄCZNIE na uderzeniach (events.onsets).
-  // Jedno uderzenie = jeden krąg. Siła → zasięg i jasność, rejestr widma → barwa.
-  // Rytm powstaje z samych zdarzeń, a nie z obwiedni głośności (ta mówiła
-  // tylko ILE się dzieje — i to była cała poprzednia wizualizacja).
+  // RYTM „inne": cząsteczki jadą WYŁĄCZNIE na uderzeniach (events.onsets).
+  // Jedno uderzenie = 1-3 cząsteczki (siła → ile i jakie duże), rejestr widma →
+  // barwa. Rytm powstaje z samych zdarzeń, a nie z obwiedni głośności.
   if (g.inne) {
     oOnsets.poll(t, (t0, s) => {
       // jasność widma w chwili uderzenia (log2 — ucho słyszy częstotliwość logarytmicznie)
@@ -448,21 +475,21 @@ function frame() {
       const bright = clamp((cz - track.oCentLo) / Math.max(0.5, track.oCentHi - track.oCentLo), 0, 1);
       S.otherBright = bright;
       S.otherHits++;
-      wheel.hit(s, bright);
+      wheel.hit(t0, s, bright);
     });
     // obwiednia tylko na panel H — mówi, jak głośno jest w „inne" W TEJ CHWILI
     const loud = clamp((oPeakRaw - OTHER_LOUD) / Math.max(0.05, OTHER_FULL - OTHER_LOUD), 0, 1);
     S.otherEnv = damp(S.otherEnv, loud, loud > S.otherEnv ? 9.0 : 2.2, dt);
     oPeakPrev = oPeakRaw;
   } else {
-    oPeakPrev = 0; // wyciszone „inne" = ciemna korona
+    oPeakPrev = 0; // wyciszone „inne" = brak cząsteczek (pula dogasa)
     S.otherEnv = 0;
     S.otherBright = 0;
   }
 
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
-  wheel.update(dt, !!g.inne, S.tempo);
+  wheel.update(t, dt, !!g.inne, S.tempo);
   // Struktura kuli reaguje na bas CIĄGLE (obwiednia S.bRms w core.update) —
   // żadnych impulsów na pojedynczy bit.
   // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).
@@ -570,9 +597,10 @@ function frame() {
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
       otherHits: S.otherHits,
-      wheel: { marks: wheel.marks, total: wheel.total, phase: +wheel.phase.toFixed(3),
+      wheel: { marks: wheel.marks, total: wheel.total, phase: +wheel.beat.toFixed(3),
         rate: +wheel.lapRate.toFixed(2), lastLane: wheel.lastLane,
-        bpm: +S.tempo.toFixed(1) },
+        dropped: wheel.dropped, spawned: wheel.spawned, bpm: +wheel.bpm.toFixed(1),
+        calib: wheel.calib },
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
       core: { pulse: core.pulse, scale: core.scale, glow: core.glow,

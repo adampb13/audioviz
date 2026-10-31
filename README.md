@@ -44,8 +44,14 @@ albo z konsoli, po kolei:
 .venv/Scripts/python.exe analyze_stems.py data/utwor       # -> data/utwor/analysis.json
 ```
 
-`separate.py` domyślnie używa `htdemucs_ft.yaml` (~300 MB modeli, pobierane
-przy pierwszym uruchomieniu); `--model htdemucs.yaml` to szybszy wariant.
+`separate.py` domyślnie używa `htdemucs.yaml` (pobierany przy pierwszym
+uruchomieniu). `--model htdemucs_ft.yaml` daje czystsze stem'y, ale na CPU trwa
+~4× dłużej (zmierzone: 12 s materiału → 77 s vs 253 s).
+
+Wgranie pliku w bibliotece od razu uruchamia podział i analizę (bez klikania),
+z logami na żywo i szacowanym czasem każdego kroku. ETA liczy się z modelu
+`czas ≈ a + b · długość` uczonego na zmierzonych przebiegach (`data/.eta.json`),
+a po każdym kroku jest korygowana o realne tempo tego zadania.
 
 ## Struktura
 

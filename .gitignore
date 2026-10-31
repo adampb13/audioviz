@@ -18,6 +18,9 @@ data/*/*.mp3
 viz/out/
 scratch/
 
+# kalibracja ETA (uczy się z lokalnych przebiegów — maszynowe, nie do repo)
+data/.eta.json
+
 # podsumowanie analysis.json (cache listy utworów)
 data/*/analysis.meta.json
 data/*/analysis.json

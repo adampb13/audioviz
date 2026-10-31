@@ -45,9 +45,9 @@ const SHORT = {
 
 // Pola, które realnie sterują sceną — kropka • i tooltip (main.js → moduły).
 const DRIVES = {
-  "inne.onset (zdarzenia)": "kręgi na piasku: jedno uderzenie = jeden krąg, więc tempo światła = tempo instrumentów",
-  "inne.onset siła": "kręgi: zasięg i jasność (mocny atak = szeroki, jasny krąg)",
-  "inne.centroid_hz": "kręgi: barwa rejestru — ciemny żar / złoto / jaśniejsze złoto",
+  "inne.onset (zdarzenia)": "cząsteczki: uderzenie = 1-3 cząsteczki; bramka (próg, refrakcja, takt) trzyma ~2-4 zdarzenia/s",
+  "inne.onset siła": "cząsteczki: ile ich wyjdzie (1-3) i jakie duże — akcent daje więcej",
+  "inne.centroid_hz": "cząsteczki: barwa rejestru — ciemny żar / złoto / jaśniejsze złoto",
   "bas.rms_norm": "struktura kuli: amplituda i tempo falowania powłoki (uStruct/uWobble)",
   "bebny.peak": "fale na ziemi + puls rozmiaru kuli",
   "wokal.rms_norm": "szerokość wstęgi + drżenie powierzchni kuli",
@@ -124,7 +124,7 @@ const DBG = [
     ["onsety", (i) => String(i.onsets ?? 0)],
     ["rozbłyski", (i) => String(i.bursts ?? 0)],
     ["trafienia inne", (i) => String(i.otherHits ?? 0)],
-    ["kręgi rytmu", (i) => String(i.wheelMarks ?? 0)],
+    ["cząsteczki rytmu", (i) => String(i.wheelMarks ?? 0)],
     ["dropEnv", (i) => f3(i.dropEnv)],
   ]],
   ["utwór / miks", [

@@ -50,6 +50,128 @@ SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 LOG_LINES = 400
 
+# --------------------------------------------------------------------------- #
+#  Szacowanie czasu kroków (ETA)
+# --------------------------------------------------------------------------- #
+# Czas podziału Demucs jest w przybliżeniu liniowy względem długości audio, ale
+# ma STAŁY narzut (start procesu + ładowanie modelu). Model: t = a + b·dur.
+# Współczynniki bierzemy z własnych pomiarów (data/.eta.json) — po trzech
+# udanych krokach model uczy się na tej maszynie, zamiast zgadywać.
+ETA_PATH = DATA / ".eta.json"
+# Wartości z realnych przebiegów na tym CPU (2026-10-31): podział idzie modelem
+# htdemucs (~10 s na segment 7.8 s + ~25 s na załadowanie sieci), stąd b≈1.6.
+# htdemucs_ft (ensemble 4 sieci) to ~4× tyle. Analiza librosa jest tania,
+# detekcja uderzeń — śladowa.
+# separate: próg ≈ czas ładowania sieci (≈50 s), potem ≈2.2 s pracy na sekundę
+# materiału — tak wychodzi z przebiegów htdemucs na tym CPU po odliczeniu krótkich
+# klipów, w których cały koszt to padding do segmentu 7.8 s.
+ETA_DEFAULTS = {"separate": (50.0, 2.2), "analyze": (2.5, 0.28), "hits": (2.0, 0.02)}
+ETA_MIN_SAMPLES = 3
+ETA_LOCK = threading.Lock()
+_DUR_CACHE: dict[str, float] = {}
+
+
+def _source_path(slug: str) -> Path | None:
+    for ext in sorted(AUDIO_EXT):
+        p = DATA / f"{slug}{ext}"
+        if p.is_file():
+            return p
+    return None
+
+
+def audio_duration(slug: str) -> float:
+    """Długość materiału w sekundach: soundfile → analysis.json → 180 s."""
+    if slug in _DUR_CACHE:
+        return _DUR_CACHE[slug]
+    dur = 0.0
+    src = _source_path(slug)
+    if src:
+        try:
+            import soundfile as sf  # noqa: PLC0415 — opcjonalna zależność
+            dur = float(sf.info(str(src)).duration)
+        except Exception:  # noqa: BLE001 — bez soundfile zostaje fallback
+            dur = 0.0
+    if dur <= 0:
+        try:
+            meta = json.loads((DATA / slug / "analysis.json").read_text(encoding="utf-8"))
+            dur = float((meta.get("meta") or {}).get("duration") or 0.0)
+        except Exception:  # noqa: BLE001
+            dur = 0.0
+    if dur <= 0:
+        dur = 180.0
+    _DUR_CACHE[slug] = dur
+    return dur
+
+
+def _eta_model() -> dict:
+    try:
+        raw = json.loads(ETA_PATH.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — brak pliku to normalny start
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+ETA_MIN_DUR = 20.0   # krótsze klipy to sam narzut (padding do segmentu) — fałszują nachylenie
+
+
+def _eta_fit(samples: list) -> tuple[float, float]:
+    """Najmniejsze kwadraty dla t = a + b·d; za mało rozrzutu → mediana ilorazów.
+
+    Pomijamy materiał krótszy niż ETA_MIN_DUR: 6-sekundowy klip to jeden segment
+    7.8 s plus ładowanie modelu, więc jego „sekundy na sekundę" zaniżają model
+    dla pełnych utworów o czynnik ~2.
+    """
+    pts = [(float(d), float(t)) for d, t in samples if float(d) >= ETA_MIN_DUR]
+    if len(pts) < ETA_MIN_SAMPLES:
+        raise ValueError("za mało pomiarów")
+    md = sum(d for d, _ in pts) / len(pts)
+    mt = sum(t for _, t in pts) / len(pts)
+    var = sum((d - md) ** 2 for d, _ in pts)
+    if var < 1e-6:
+        raise ValueError("brak rozrzutu długości")
+    b = sum((d - md) * (t - mt) for d, t in pts) / var
+    a = mt - b * md
+    a = max(0.0, min(600.0, a))
+    b = max(0.02, min(6.0, b))
+    return a, b
+
+
+def eta_seconds(step: str, duration: float, model: dict | None = None) -> float:
+    a, b = ETA_DEFAULTS.get(step, (2.0, 0.2))
+    samples = (model if model is not None else _eta_model()).get(step) or []
+    try:
+        a, b = _eta_fit(samples)
+    except (ValueError, TypeError):
+        pass
+    return max(1.0, a + b * max(1.0, duration))
+
+
+def fmt_dur(sec: float) -> str:
+    """2 min 5 s · 47 s · 1 h 3 min — do logów i UI."""
+    sec = max(0, int(round(sec)))
+    if sec < 60:
+        return f"{sec} s"
+    m, s = divmod(sec, 60)
+    if m < 60:
+        return f"{m} min {s:02d} s" if s else f"{m} min"
+    h, m = divmod(m, 60)
+    return f"{h} h {m:02d} min"
+
+
+def record_eta(step: str, duration: float, elapsed: float) -> None:
+    """Zapisz pomiar, żeby kolejne ETA było liczone z rzeczywistości, nie z sufitu."""
+    with ETA_LOCK:
+        model = _eta_model()
+        arr = list(model.get(step) or [])
+        arr.append([round(float(duration), 2), round(float(elapsed), 2)])
+        model[step] = arr[-8:]
+        try:
+            DATA.mkdir(parents=True, exist_ok=True)
+            ETA_PATH.write_text(json.dumps(model, indent=1), encoding="utf-8")
+        except OSError:
+            pass
+
+
 
 # --------------------------------------------------------------------------- #
 #  Narzędzia
@@ -265,6 +387,12 @@ class Job:
         self.finished: float | None = None
         self.error: str | None = None
         self.lines: deque[dict] = deque(maxlen=LOG_LINES)
+        self.duration = audio_duration(slug)          # długość materiału (s)
+        model = _eta_model()
+        self.eta = {s: eta_seconds(s, self.duration, model) for s in steps}
+        self.eta_scale = 1.0                          # korekta po zmierzonym kroku
+        self.step_started: float | None = None
+        self.step_actual: dict[str, float] = {}
         self._proc: subprocess.Popen | None = None
         self._cancel = threading.Event()
 
@@ -274,12 +402,33 @@ class Job:
 
     def as_dict(self, tail: int = 60) -> dict:
         now = self.finished or time.time()
+        total = 0.0
+        left = 0.0
+        steps_out = []
+        for s in self.steps:
+            key = s["key"]
+            base = self.eta.get(key) or 0.0
+            if s["status"] == "done":
+                est = self.step_actual.get(key, base)
+                eta_left = 0.0
+            else:
+                est = base * self.eta_scale
+                if s["status"] == "running" and self.step_started:
+                    eta_left = max(0.0, est - (now - self.step_started))
+                else:
+                    eta_left = est
+            total += est
+            left += eta_left
+            steps_out.append({**s, "eta": round(est, 1), "eta_left": round(eta_left, 1)})
         return {
-            "id": self.id, "slug": self.slug, "steps": self.steps, "status": self.status,
+            "id": self.id, "slug": self.slug, "steps": steps_out, "status": self.status,
             "current": self.current, "error": self.error,
             "elapsed": round(now - (self.started or self.created), 1),
             "queue_pos": _QUEUE.qsize() if self.status == "queued" else 0,
             "lines": list(self.lines)[-tail:],
+            "duration": round(self.duration, 1),
+            "eta_total": round(total, 1),
+            "eta_left": round(left, 1),
         }
 
     def cancel(self) -> None:
@@ -326,6 +475,12 @@ def _run_step(job: Job, step: str) -> None:
         )
     cmd = _cmd_for(step, job.slug)
     job.log("$ " + " ".join(cmd[1:]))
+    est = job.eta.get(step, 0.0) * job.eta_scale
+    job.step_started = time.time()
+    job.log(f"szacowany czas (materiał {fmt_dur(job.duration)}): ~{fmt_dur(est)}", "eta")
+    if step == "separate":
+        job.log("model: htdemucs (1 sieć). Czystrze (i ~4× dłużej): "
+                "separate.py --model htdemucs_ft.yaml", "eta")
     proc = subprocess.Popen(
         cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1,
@@ -346,6 +501,16 @@ def _run_step(job: Job, step: str) -> None:
     for s in job.steps:
         if s["key"] == step:
             s["status"] = "done"
+
+    # Pomiar trafia do modelu (kolejne zadania dostają coraz lepsze ETA), a jeśli
+    # ten krok poszedł inaczej niż zakładaliśmy — korygujemy szacunek reszty.
+    took = time.time() - (job.step_started or time.time())
+    job.step_actual[step] = took
+    record_eta(step, job.duration, took)
+    est0 = job.eta.get(step) or 0.0
+    if est0 > 0.5:
+        job.eta_scale = max(0.25, min(4.0, job.eta_scale * (took / est0)))
+    job.log(f"zmierzone: {fmt_dur(took)} (szacowano ~{fmt_dur(est0)})", "eta")
 
 
 class _Cancelled(Exception):
@@ -558,8 +723,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             for t in tracks:
                 t["job"] = job_for(t["slug"])
             with _JOBS_LOCK:
+                # Zakończone zadanie zostaje w odpowiedzi jeszcze 2 minuty: panel
+                # w przeglądarce musi zdążyć pokazać „gotowe" i zmierzone czasy —
+                # wcześniej znikało w tej samej sekundzie, w której kończyło pracę,
+                # więc użytkownik zostawał z zamrożonym licznikiem na ekranie.
+                now = time.time()
                 jobs = [j.as_dict() for j in _JOBS.values()
-                        if j.status in ("queued", "running")]
+                        if j.status in ("queued", "running")
+                        or (j.finished is not None and now - j.finished < 120)]
             return self._json({"tracks": tracks, "jobs": jobs, "caps": CAPS})
         if path.startswith("/api/job/"):
             jid = path.rsplit("/", 1)[-1]
@@ -667,7 +838,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # walidacja wejść, żeby błąd był od razu w UI, a nie po minucie w logu
         if "separate" in steps and not track["source"]:
             raise ValueError("brak pliku źródłowego — wgraj audio albo stem'y")
-        if "analyze" in steps and len(track["stems"]) < len(STEMS):
+        # Świeżo wgrany plik nie ma jeszcze stemów, ale podział jest w tym samym
+        # zadaniu — dopiero gdy nikt ich nie zrobi, analiza nie ma wejścia.
+        if ("analyze" in steps and "separate" not in steps
+                and len(track["stems"]) < len(STEMS)):
             raise ValueError("analiza wymaga czterech stemów (wokal, bas, bębny, inne)")
         job = enqueue(slug, steps)
         self._json({"ok": True, "job": job.as_dict()}, 202)

@@ -6,7 +6,10 @@ import { PRESETS, DEFAULT_PRESET } from "./palette.js";
 
 const DEF = PRESETS[DEFAULT_PRESET]; // wartości startowe = preset domyślny
 
-const MAX_WAVES = 30; // każdy transient ma własną falę; max współbieżnych policzony z danych = 27
+// Puła fal na ziemi. Wcześniej 30 („każdy transient ma własną falę") — 27
+// współbieżnych pierścieni zlewało się w mgłę i gubiło takt. Teraz 8: przy
+// akcentach co pół taktu ÷ 2.5 s życia widać 4-6 wyraźnych uderzeń, nie dywan.
+const MAX_WAVES = 8;
 
 const VERT = /* glsl */ `
 uniform float uTime;
