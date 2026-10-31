@@ -1,7 +1,10 @@
 // System 1: ZIEMIA — ciemna, pomarszczona pustynia z koncentrycznymi falami od uderzeń bębnów.
 // 1 uderzenie = 1 fala (max 30 slotów); fala per-piksel, życie z siły (zasięg 23-54 m, do krawędzi kadru).
 import * as THREE from "three";
-import { NOISE_GLSL, FOG_GLSL, PAL } from "./glsl.js";
+import { NOISE_GLSL, FOG_GLSL } from "./glsl.js";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+const DEF = PRESETS[DEFAULT_PRESET]; // wartości startowe = preset domyślny
 
 const MAX_WAVES = 30; // każdy transient ma własną falę; max współbieżnych policzony z danych = 27
 
@@ -126,10 +129,10 @@ export class Ground {
       uCorePos: { value: new THREE.Vector3(0, 0.4, 0) },
       uCoreGlow: { value: 0.4 },
       uPulse: { value: 0 },
-      uColLo: { value: c(0x140c06) }, // baza #140c06 z auditu
-      uColHi: { value: c(PAL.groundHi) },
-      uGold: { value: c(PAL.gold) },
-      uGoldBright: { value: c(PAL.goldBright) },
+      uColLo: { value: c(DEF.pal.groundLo) }, // baza z presetu (złoty: #140c06 z auditu)
+      uColHi: { value: c(DEF.pal.groundHi) },
+      uGold: { value: c(DEF.pal.gold) },
+      uGoldBright: { value: c(DEF.pal.goldBright) },
       uFogColor: { value: c(fogColor) },
       uFogDensity: { value: fogDensity },
     };
@@ -160,6 +163,16 @@ export class Ground {
   reset() {
     for (const w of this.waves) w.set(0, 0, 7, 0);
     this.waveI = 0;
+  }
+
+  // Preset barwy ziemi (+ mgła, bo FOG_GLSL miesza ku uFogColor).
+  setPalette({ lo, hi, gold, bright, fog }) {
+    const u = this.uniforms;
+    u.uColLo.value.setHex(lo);
+    u.uColHi.value.setHex(hi);
+    u.uGold.value.setHex(gold);
+    u.uGoldBright.value.setHex(bright);
+    if (fog != null) u.uFogColor.value.setHex(fog);
   }
 
   update(t, energy, beatPulse) {

@@ -11,7 +11,9 @@
 // im dalej, tym więcej mgły, więc grzbiety jaśnieją, tracą kontrast i mięknie im
 // krawędź — dokładnie tak, jak czyta się prawdziwą panoramę o zmierzchu.
 import * as THREE from "three";
-import { PAL } from "./glsl.js";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+const DEF = PRESETS[DEFAULT_PRESET]; // wartości startowe = preset domyślny
 
 const COLS = 768;   // kolumny grzbietu (~1 m na kolumnę na dalszych pasmach)
 const ROWS = 6;     // wiersze: 0 = podstawa, 1 = grzbiet (gradient mgły w pionie)
@@ -178,16 +180,17 @@ export class Mountains {
     this.layers = [];
 
     // kolor mgły = niebo tuż nad horyzontem (lekko podbity: tonacja i bloom
-    // rozjaśniają obrazek, więc czysty PAL.skyHorizon byłby za ciemny i pasma
+    // rozjaśniają obrazek, więc czysty kolor horyzontu byłby za ciemny i pasma
     // zlewałyby się z powrotem w czarną plamę)
-    const hazeColor = new THREE.Color(PAL.skyHorizon).multiplyScalar(1.45);
+    const hazeColor = new THREE.Color(DEF.pal.skyHorizon).multiplyScalar(1.45);
 
     for (const L of LAYERS) {
       const w = 2 * halfWidthAt(L.z, REF_ASPECT) * WIDTH_MARGIN;
       const { geo, crestMax } = buildRidge(L, w);
+      const [defDark, defLit] = DEF.mtn[this.layers.length] || [L.dark, L.lit];
       const uniforms = {
-        uDark: { value: new THREE.Color(L.dark) },
-        uLight: { value: new THREE.Color(L.lit) },
+        uDark: { value: new THREE.Color(defDark) },
+        uLight: { value: new THREE.Color(defLit) },
         uHaze: { value: hazeColor },
         uHazeAmt: { value: L.haze },
         uBaseHaze: { value: L.base },
@@ -204,6 +207,20 @@ export class Mountains {
       this.group.add(mesh);
       this.layers.push({ mesh, uniforms, z: L.z, h: L.h, haze: L.haze, crestMax, cfg: L, w });
     }
+  }
+
+  // Preset barwy pasm: każdy pas dostaje własną parę ciemny/jasny (głębia
+  // powietrzna zostaje), a mgła idzie w stronę horyzontu presetu.
+  setPalette({ layers, horizon }) {
+    const haze = new THREE.Color(horizon).multiplyScalar(1.45);
+    this.layers.forEach((ly, i) => {
+      const pair = layers[i];
+      if (pair) {
+        ly.uniforms.uDark.value.setHex(pair[0]);
+        ly.uniforms.uLight.value.setHex(pair[1]);
+      }
+      ly.uniforms.uHaze.value.copy(haze);
+    });
   }
 
   // Szerokość kurtyny musi zależeć od proporcji okna, inaczej po bokach widać

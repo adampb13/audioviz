@@ -14,7 +14,12 @@
 // Bez cząstek: kula świeci sobą (usunięte na życzenie — „inne" jest jedynym
 // źródłem koloru, a energia jedynym źródłem rozmiaru).
 import * as THREE from "three";
-import { NOISE_GLSL, PAL } from "./glsl.js";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+// Wartości startowe = preset domyślny (złoty). Zmiana presetu idzie przez
+// setPalette(), więc konstruktor nie musi znać żadnego innego wariantu.
+const DEF = PRESETS[DEFAULT_PRESET];
+import { NOISE_GLSL } from "./glsl.js";
 
 // Przemieszczenie powierzchni wzdłuż normalnej — WYŁĄCZNIE powłoka.
 // Pole jest radialne i nie ma wyróżnionego kierunku (suma szumów o średniej 0),
@@ -88,6 +93,10 @@ const float GAIN = 0.50;    // jasność bazowa
 const float HOT = 0.50;     // temperatura górnego końca (bursztyn <-> krem)
 uniform float uGlow;   // 0..1 — energia całości: złoto -> rozświetlona
 uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
+// Paleta żaru (presety barwy, palette.js). Trzy pary zamiast zaszytych vec3:
+// deepA/deepB = cień powłoki (cicho -> głośno), hotA/hotB = górny koniec,
+// hotC = domieszka przy pełnym rozświetleniu.
+uniform vec3 uDeepA, uDeepB, uHotA, uHotB, uHotC;
 varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
 varying vec3 vObj;
 varying vec3 vN;
@@ -100,14 +109,14 @@ void main() {
   vec3 V = normalize(cameraPosition - vWorld);
   float fres = pow(clamp(1.0 - abs(dot(N, V)), 0.0, 1.0), 2.0);
 
-  vec3 deep = mix(vec3(0.34, 0.10, 0.0), vec3(0.44, 0.18, 0.03), G); // ciemny bursztyn
+  vec3 deep = mix(uDeepA, uDeepB, G); // ciemny żar (preset)
   // górny koniec zostaje POMARAŃCZOWY, nie kremowy: przy bloom+ACES krem
   // odbarwia się do bieli i wtedy akcent koloru na bit przestaje być widoczny
-  vec3 hot = mix(vec3(1.0, 0.52, 0.16), vec3(1.0, 0.66, 0.32), HOT * 0.45);
+  vec3 hot = mix(uHotA, uHotB, HOT * 0.45);
   // głośno -> górny koniec idzie w stronę kremu, ale ZOSTAJE ZŁOTY:
   // pełne rozświetlenie (uGlow = 1) to jasny, ciepły żar, nie biała kula —
   // biel odbiera scenie jej bursztynowy charakter (i tak dodaje ją bloom).
-  hot = mix(hot, vec3(1.0, 0.74, 0.34), G * 0.45); // niska niebieska = halo zostaje złote
+  hot = mix(hot, uHotC, G * 0.45); // akcent presetu przy pełnym żarze
   vec3 base = mix(deep, hot, min(1.0, ENERGY + 0.10 * G));
 
   // STRUKTURA BASU = falowanie powłoki: modulujemy JASNOŚĆ (nie geometrię),
@@ -133,9 +142,11 @@ function haloTexture() {
   cv.width = cv.height = S;
   const ctx = cv.getContext("2d");
   const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
-  g.addColorStop(0.0, "rgba(255,207,138,0.22)"); // niski center-alpha: nie clipować
-  g.addColorStop(0.35, "rgba(217,152,74,0.15)");
-  g.addColorStop(1.0, "rgba(217,152,74,0)");
+  // BIAŁY gradient — kolor nadaje dopiero SpriteMaterial.color z presetu
+  // (wcześniej kolor był wypieczony w teksturze i nie dał się przefarbować).
+  g.addColorStop(0.0, "rgba(255,255,255,0.24)"); // niski center-alpha: nie clipować
+  g.addColorStop(0.35, "rgba(255,255,255,0.15)");
+  g.addColorStop(1.0, "rgba(255,255,255,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, S, S);
   const tex = new THREE.CanvasTexture(cv);
@@ -157,6 +168,12 @@ export class CoreSphere {
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
       uGlow: { value: 0 },
+      // paleta (nadpisywana przez setPalette przy zmianie presetu)
+      uDeepA: { value: new THREE.Color().fromArray(DEF.core.deepA) },
+      uDeepB: { value: new THREE.Color().fromArray(DEF.core.deepB) },
+      uHotA: { value: new THREE.Color().fromArray(DEF.core.hotA) },
+      uHotB: { value: new THREE.Color().fromArray(DEF.core.hotB) },
+      uHotC: { value: new THREE.Color().fromArray(DEF.core.hotC) },
     };
     const mat = new THREE.ShaderMaterial({
       vertexShader: VERT,
@@ -174,6 +191,7 @@ export class CoreSphere {
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       opacity: 0.35,
+      color: new THREE.Color(DEF.pal.gold),
     });
     this.halo = new THREE.Sprite(this.haloMat);
     this.halo.scale.setScalar(2.6);
@@ -181,7 +199,7 @@ export class CoreSphere {
     this.mesh.add(this.halo);
 
     // ziemia ma odbijać to światło, nie płonąć
-    this.light = new THREE.PointLight(PAL.gold, 8, 60, 2);
+    this.light = new THREE.PointLight(DEF.pal.gold, 8, 60, 2);
     this.mesh.add(this.light);
 
     // obwiednie (czysto JS)
@@ -190,6 +208,19 @@ export class CoreSphere {
     this.pulse = 0; // puls od uderzenia w bębny (rozmiar, szybki ale gładki)
     this.scale = 1; // wygładzony rozmiar bazowy (z energii całości)
     this.glow = 0;  // 0..1 — rozświetlenie barwy (ta sama energia całości)
+  }
+
+  // Preset barwy: żar powłoki + światło punktowe + halo. Same zapisy uniformów,
+  // więc przełączanie w trakcie grania jest darmowe (brak rekompilacji shadera).
+  setPalette({ deepA, deepB, hotA, hotB, hotC, light, halo }) {
+    const u = this.uniforms;
+    u.uDeepA.value.fromArray(deepA);
+    u.uDeepB.value.fromArray(deepB);
+    u.uHotA.value.fromArray(hotA);
+    u.uHotB.value.fromArray(hotB);
+    u.uHotC.value.fromArray(hotC);
+    if (light != null) this.light.color.setHex(light);
+    if (halo != null) this.haloMat.color.setHex(halo);
   }
 
   // energySmooth: energia całości (rozmiar I rozświetlenie barwy);

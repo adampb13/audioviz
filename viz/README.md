@@ -22,7 +22,8 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
   Kolor sfery zależy od energii całości, a pojedyncze iskry po bokach — od
   `peak` ścieżki „inne”, więc obie ścieżki muszą być w analizie.
 - `?demo&t=123` — start bez gestu użytkownika, od 123 s (zegar własny, bez audio).
-- `Spacja` — pauza · `H` — panel HUD · `S` — panel ścieżek · `#err` — błędy JS ·
+- `Spacja` — pauza · `H` — panel HUD · `S` — ustawienia · `Esc` — zamknij ustawienia ·
+  `#err` — błędy JS ·
   `window.__viz` — sonda stanu (`t, energy, dropEnv, dropLog, bursts, fpsP95, calls,
   tris, ribbon, muted, bRaw/bRms…`).
 - `?debug` dodatkowo: **ślad klatek** `window.__trace(n)` — pierścień 900 klatek
@@ -55,14 +56,15 @@ odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena n
 |---|---|
 | `main.js` | boot, master clock (audio.currentTime / demo), pętla, LERP stanu, triggery: **1 fala + 1 puls sfery na KAŻDYM uderzeniu w stem „bebny”** (`events.hits`, próg 0.02, dedupe 50 ms); struktura sfery NIE ma triggerów — płynie z ciągłej obwiedni basu; ekspozycja, HUD, `__viz` |
 | `data.js` | `Track`: analysis.json → Float32Array, percentyle, forwardFill pitch. `onsetT/onsetS` z `stems.bebny.events.hits` (fallback `onsets`), `bassBeatT/S` (391 bitów basu), `bassOnsetT/S`, `oRmsP95`; `sampleAt` (interpolacja klatek), `EventCursor` (zdarzenia bez interpolacji) |
-| `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2, paleta |
+| `glsl.js` | wspólny GLSL: Ashima simplex 3D, FBM-4, ridged FBM, mgła exp2 |
 | `ground.js` | ziemia: gładka baza FBM + kolejka **max 30 fal** (1 uderzenie = 1 fala, amp ≤ 0.22, 9 m/s, życie 2.6-6.0 s zależne od siły → zasięg 23-54 m, `sin(d·0.85)`); pole fal liczone **per-piksel** z analitycznym gradientem normalnej (zero faset z siatki), współśrodkowa (wspólna faza) nieregularność azymutalna; tłumienie radialne `exp(-r·0.010)` — pierścień dochodzi do krawędzi kadru, wygasanie od 72% życia; matowe oświetlenie, owalna sadzawka |
 | `core.js` | sfera-żar (r = 0.9, y = 0.3, wkopana), halo i PointLight. Wejścia: **„bas” → ciągła struktura powłoki**, **energia całości → rozmiar bazowy i rozświetlenie barwy** (`uGlow`), **uderzenie w „bebny” → puls rozmiaru**. Rozmiar: `(1 + 0.85·energy^1.15) · (1 + 0.26·pulse)` (puls: atak 22/s, zejście 9/s). **Barwa**: `uGlow = smoothstep(0.20, 1.00, energy)` (atak 3/s, powrót 1.1/s), w shaderze `G = uGlow²` — cicho = głęboki bursztyn (`ENERGY 0.45`, `GAIN 0.50`, `HOT 0.50`, sufﬁt `0.78`), głośno = jasny kremowo-złoty żar (`hot → (1.0, 0.74, 0.34)`, `gain +0.16·G`, sufﬁt `0.78 + 0.10·G`); niska składowa niebieska trzyma halo złotym. Kwadrat `G` zostawia złoto w środku skali — inaczej cały refren byłby biały. Światło `2.4 + 1.3·glow`, halo krycie `0.10 + 0.08·glow`, barwa `(1.0, 0.72 + 0.15·glow, 0.44 + 0.22·glow)` |
 | `ribbon.js` | wstęga wokalu = **prosta, pozioma rzeka jedwabiu**: geometria sztywna, `HALF_X` = 1/3 szerokości kadru, `z = −28`, wyśrodkowana, **symetryczny taper 22%** długości (`width^0.7` + `alpha^2.2`). **Szerokość = głośność wokalu** (`rms_norm^0.8` → 0.16–4.6 m, damp 3.0), **falowanie = lokalne tempo** (jedna faza całkowana z `tempo_local_bpm`), **cisza = pasmo płaskie i skurczone do nici** (brama `pitch_voiced_prob` × energia, hold 0.9 s, release τ≈1.4 s), **kolor** = złoto jaśniejące od `pitch_midi` i `centroid_hz`. Kontur melodii w Y płytki, lead 80 ms. Zero tekstur i historii — cała zmienność w uniformach |
 | `ridge.js` | czysta matematyka grzbietu (bez `three`): `ridgeProfile` + tabela `RANGES` (4 pasma: near −95, mid −165, far −300, distant −470 m). Wydzielone, żeby sylwetkę policzyć w node: `node viz/scripts/crest_preview.mjs` |
 | `mountains.js` | panorama = **4 pasma**, grzbiet **wypalany na CPU przy starcie** do tekstury R32F (768 kolumn × 6 wierszy na pasmo) — vertex shader nie liczy szumu. **Głębia = perspektywa powietrzna** (każde pasmo jaśnieje ku kolorowi nieba, zero `FogExp2` na pasmach), cieniowanie zboczy z wygładzonego nachylenia (±40 kolumn), rim na grani, mgła u podstawy, miękka krawędź. **Statyczne — zero sterowania dźwiękiem** |
 | `atmosphere.js` | kopuła nieba (gradient + prawie niewidoczne chmury, prędkość od tempa) + **320 statycznych gwiazd** na sferze R = 430, elewacja 8–37°, azimut ±65°, migotanie ±18%. Bez pyłu i bez bokeh-iskier |
-| `settings.js` | panel ścieżek: przycisk + lista stemów w lewym dolnym rogu; trzyma `gain[id] ∈ {0,1}` czytany w pętli i woła `onToggle` (main.js wycisza audio). Bez zależności od sceny, żeby dało się go testować osobno |
+| `settings.js` | panel lewego dolnego rogu: ścieżki (wokal / bas / **fale** / inne) z podpisem, co każda rysuje w scenie, **głośność ogólna** (suwak 0–100%, `el.volume` wszystkich czterech elementów) i **preset barwy**. Trzyma `gain[id] ∈ {0,1}` czytany w pętli i woła `onToggle` / `onVolume` / `onPreset`. Bez zależności od sceny, żeby dało się go testować osobno |
+| `palette.js` | cztery **presety barwy całej sceny** (złoty = domyślny/obecny, neonowy, deep blue, zielony). Jeden preset przestawia niebo, mgłę, ziemię, pasma gór, wstęgę, żar kuli, iskry, gwiazdy, tint gradingu ORAZ akcenty UI przez zmienne CSS `--acc/--acc2/--ink`. Warstwy dostają kolory przez własne `setPalette()` — same zapisy uniformów, więc przełączanie w trakcie grania jest darmowe (bez rekompilacji shaderów) |
 | `postfx.js` | RenderPass → UnrealBloom (0.55 / 0.75 / próg 0.6) → grade (CA, winieta, ziarno, lift cieni) → OutputPass (ACES); w grade guard NaN/Inf na wyjściu — NaN nie przelatuje przez mipy blooma jako czarne prostokąty |
 | `particles.js` | **iskry wylatujące z kuli** (`Sparks`) — pełny obraz ścieżki „inne" w danej chwili: **(a) gęstość** ← obwiednia `peak` (`0.15 + 2.8·env^1.7` iskier/s, atak 9/s, powrót 2.2/s), więc gęsty fragment sypie drobinami, a cichy ledwo jedną; **(b) rozmiar i prędkość** ← `peak` (`0.72–2.63 m`); **(c) kolor** ← `centroid_hz` w log2 między p10 a p95 (ciemny pad `(1.0, 0.24, 0.03)` → złoto → biały żar `(1.0, 0.96, 0.88)`); **(d) elewacja startu** ← też `centroid_hz` (ciemne dźwięki z dolnej flanki kuli, jasne z górnej). Start **na powierzchni sfery** (`core.surfaceRadius() × 1.02`), naprzemiennie lewa/prawa; wyrzut wzdłuż normalnej `1.25–3.05 m/s` + w górę, grawitacja `1.35`, opór `0.32`, życie `2.0–3.5 s`, wygaszanie od 45% (iskra spokojnie opada i gaśnie). Dodatkowo przekroczenie progu `peak = 0.50` (p98, refrakcja 0.45 s) daje jedną iskrę „na błysk" — tylko prawdziwe transjenty, nie każdy szum. Pula 48, jeden draw call, additive, `depthWrite: false`. W panelu H `peak` i `centroid` mają kropkę • — to one sterują iskrami |
 | `hud.js` | panel **H**: **wszystkie parametry ramkowe wszystkich czterech ścieżek** (21 na ścieżkę: rms, rms_norm, rms_db, peak, zcr, centroid, bandwidth, rolloff, flatness, spectral_contrast ×7, dominant, mel_db ×32, mfcc ×13, chroma ×12, chroma_active, onset_strength, onset_norm, tempo, pitch_hz, pitch_midi, voiced_prob; bębny nie mają pól `pitch*`, pusta grupa nie trafia do panelu) — dwie kolumny flex (wokal+bas+bębny / inne+scena), jeden scrollbar, nagłówek sekcji zwija ją klikiem. Definicja pól jest **jedna** (`stemParams` w data.js), więc nowe pole w analizie pojawia się w panelu bez zmian w hud.js. Skala słupka: stała dla wielkości unormowanych (`ABS_RANGE`: 0–1, dB, midi), inaczej p98 wartości bezwzględnej — jeden głośny moment nie ściska skali. Druga kolumna to blok **scena**: `t` vs `audio.currentTime` i ich różnica (rozjazd zegarów), `seek`, sekcja, stan, fps/klatka/px/draw calls/trójkąty, `uGlow/uStruct/uWobble/pulse/skala/promień`, **surowe próbki → obwiednie** z ▲▼ (widać, czy scena goni dźwięk), stan iskier, liczniki zdarzeń, utwór/miks. Animacja wyłącznie na `transform` (zero reflow), słupki 30×/s, liczby 4×/s |
@@ -70,6 +72,30 @@ odejmuje też jej udział w świetle i ekspozycji — cztery wyciszone = scena n
 
 Usunięte (martwe albo wyparte): `burst.js` (osobny system cząstek — teraz w `core.js`),
 `basscore.js`, `fog.js`, `rings.js`.
+
+### Presety barwy
+
+`palette.js` trzyma cztery palety; wybór idzie z panelu ustawień (`S`) i działa
+natychmiast, także w trakcie grania. Jeden preset ustawia **całą** scenę i UI —
+nie ma stanu, w którym niebieska scena ma złoty HUD.
+
+| preset | barwa wiodąca | charakter |
+|---|---|---|
+| **złoty** (domyślny) | bursztyn `#d9984a` | dotychczasowy wygląd, 1:1 z poprzednią paletą |
+| **neonowy** | magenta `#ff3fa4` | fioletowe tło, cyjanowe iskry i gwiazdy (kontrast punktowy) |
+| **deep blue** | błękit `#4f9fe8` | zimna tonacja filmowa, stalowe góry, księżycowa kula |
+| **zielony** | szmaragd `#4fc48a` | ciemna zieleń w tle, jasna mięta w świetle |
+
+Zasady, które trzymają palety spójnymi (i dlatego tło nie „świeci" jak obiekty):
+jedna barwa wiodąca + jedna poboczna; tło zawsze ciemniejsze i mniej nasycone od
+źródeł światła; łuna nad horyzontem (`glow`) to osobny, głębszy kolor niż akcent
+(przy pełnym nasyceniu niebo zlewało się w jeden pas i gubiło głębię); góry to
+prawie neutralne sylwetki, nie lakiery. Wartości `core.*`/`spark.*` są w
+przestrzeni liniowej (idą do shaderów), `css.*` w sRGB (idą do arkusza).
+
+Aby dodać preset: dopisz wpis w `PRESETS`, dodaj klucz do `PRESET_ORDER` — UI
+i `applyPreset` obsłużą go bez zmian w innych plikach.
+
 
 ## Mapowanie danych → efekt
 

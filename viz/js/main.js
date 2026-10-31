@@ -4,7 +4,6 @@
 // Sterowanie: [SPACJA] start/pauza · [H] HUD · ?demo&t=123 — start bez gestu od 123 s.
 import * as THREE from "three";
 import { Track, STEM_FILES, EventCursor, sampleAt, damp, clamp } from "./data.js";
-import { PAL } from "./glsl.js";
 import { Ground } from "./ground.js";
 import { CoreSphere } from "./core.js";
 import { VocalRibbon } from "./ribbon.js";
@@ -12,6 +11,11 @@ import { Mountains } from "./mountains.js";
 import { Atmosphere } from "./atmosphere.js";
 import { createPost } from "./postfx.js";
 import { createSettings } from "./settings.js";
+import { applyPreset, PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+// Wartości startowe sceny = preset domyślny (applyPreset i tak je ustawia,
+// ale konstruktory muszą dostać sensowne kolory już przy tworzeniu materiałów).
+const DEF = PRESETS[DEFAULT_PRESET];
 import { createHud } from "./hud.js";
 import { Sparks } from "./particles.js";
 
@@ -61,7 +65,7 @@ let ctxLost = 0;
 renderer.domElement.addEventListener("webglcontextlost", () => { ctxLost++; }, false);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(PAL.skyTop);
+scene.background = new THREE.Color(DEF.pal.skyTop);
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 900);
 camera.position.set(0, 7, 22);
@@ -77,7 +81,7 @@ if (!resp.ok) {
 const track = new Track(await resp.json());
 
 // ---------- systemy sceny ----------
-const ground = new Ground(PAL.fog, FOG_DENSITY);
+const ground = new Ground(DEF.pal.fog, FOG_DENSITY);
 scene.add(ground.mesh);
 const core = new CoreSphere();
 scene.add(core.group);
@@ -97,6 +101,13 @@ const sparks = new Sparks();
 scene.add(sparks.points);
 
 const post = createPost(renderer, scene, camera);
+
+// ---------- preset barwy (jedno źródło prawdy dla całej sceny) ----------
+// Wszystkie warstwy mają setPalette(); applyPreset rozdaje im nowe kolory,
+// a interfejs dostaje akcenty przez zmienne CSS (--acc/--acc2), więc UI nie
+// zostaje w złocie, gdy scena jest niebieska.
+const sys = { scene, ground, core, ribbon, mountains, atmosphere, sparks, post };
+let presetKey = applyPreset(DEFAULT_PRESET, sys);
 
 // Sonda QA (?debug): dostęp do obiektów sceny dla zrzutów, pomiarów i bisectowania
 if (params.has("debug")) {
@@ -136,13 +147,24 @@ const masterAudio = () => STEM_FILES.map((n) => audio[n]).find((el) => el && el.
 // ---------- panel ścieżek (przycisk w lewym dolnym rogu) ----------
 // Wyciszenie ścieżki = `muted` na audio ORAZ gain 0 na jej sygnale w pętli,
 // więc test „co robi sam bas / sam wokal" nie wymaga grzebania w kodzie.
-const settings = createSettings(
-  (id, on) => {
+const settings = createSettings({
+  onToggle: (id, on) => {
     const el = audio[id];
     if (el) el.muted = !on;
   },
-  () => restartTrack()
-);
+  onRestart: () => restartTrack(),
+  // głośność ogólna: sam poziom dźwięku (scena czyta dane, nie sygnał głośnika)
+  onVolume: (v) => {
+    for (const n of STEM_FILES) {
+      const el = audio[n];
+      if (el) el.volume = v;
+    }
+  },
+  onPreset: (key) => {
+    presetKey = applyPreset(key, sys);
+  },
+  preset: DEFAULT_PRESET,
+});
 if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio; }
 
 // ---------- zdarzenia (triggery impulsowe, bez interpolacji) ----------
@@ -537,6 +559,8 @@ function frame() {
       dropEnv: S.dropEnv, onsets: S.onsetsFired, bursts: S.bursts, otherHits: S.otherHits,
       track: TRACK, duration: track.duration,
       gains: `w${settings.gain.wokal} b${settings.gain.bas} d${settings.gain.bebny} i${settings.gain.inne}`,
+      volume: Math.round(settings.volume * 100) + "%",
+      preset: PRESETS[presetKey].label,
       ctxLost,
     });
     window.__viz = {
@@ -559,6 +583,9 @@ function frame() {
         tint: [sparks.lastBright, sparks.lastLoud] },
       ctxLost, track: TRACK,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
+      // poziom każdego elementu audio (głośność ogólna × wyciszenie ścieżki)
+      vols: Object.fromEntries(STEM_FILES.map((n) => [n, audio[n] ? +audio[n].volume.toFixed(2) : null])),
+      preset: presetKey,
     };
   }
 }

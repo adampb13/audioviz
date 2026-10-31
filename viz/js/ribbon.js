@@ -11,7 +11,9 @@
 // Zero fbm w alpha (jedwab to gładki gradient) i zero historii w teksturze —
 // geometria jest sztywna, cała zmienność płynie w uniformach.
 import * as THREE from "three";
-import { PAL } from "./glsl.js";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+const DEF = PRESETS[DEFAULT_PRESET]; // wartości startowe = preset domyślny
 import { sampleAt, clamp, damp } from "./data.js";
 
 const SEGS = 320;      // segmenty wzdłuż X (~0.09 m na segment po zwężeniu)
@@ -148,9 +150,9 @@ export class VocalRibbon {
         uGlow: { value: 0.1 },
         uBright: { value: 0 },
         uLayerAlpha: { value: alphaByLayer[l] },
-        uGold: { value: new THREE.Color(PAL.gold) },
-        uGoldBright: { value: new THREE.Color(PAL.goldBright) },
-        uCream: { value: new THREE.Color(PAL.cream) },
+        uGold: { value: new THREE.Color(DEF.pal.gold) },
+        uGoldBright: { value: new THREE.Color(DEF.pal.goldBright) },
+        uCream: { value: new THREE.Color(DEF.pal.cream) },
       };
       const mat = new THREE.ShaderMaterial({
         vertexShader: VERT,
@@ -186,6 +188,15 @@ export class VocalRibbon {
   // Wstęga ma zajmować 1/3 szerokości OKNA przy dowolnej proporcji: pół-szerokość
   // kadru na głębokości BASE_Z rośnie liniowo z aspectem (45 m dla 16:9), a wstęga
   // to jej trzecia część. Bez tego 21:9 zwężało ją poniżej 1/3, a pion rozdymał.
+  // Preset barwy wstęgi (wszystkie warstwy naraz — to jedna świetlista smuga).
+  setPalette({ gold, bright, cream }) {
+    for (const u of this.layerMats) {
+      u.uGold.value.setHex(gold);
+      u.uGoldBright.value.setHex(bright);
+      u.uCream.value.setHex(cream);
+    }
+  }
+
   resize(aspect) {
     const halfX = FRAME_HALF_X * (aspect / (16 / 9)) * WIDTH_FRAC;
     for (const u of this.layerMats) u.uHalfX.value = halfX;

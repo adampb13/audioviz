@@ -127,6 +127,8 @@ const DBG = [
     ["utwór", (i) => i.track ?? "—"],
     ["długość", (i) => (i.duration ? i.duration.toFixed(1) + " s" : "—")],
     ["głośności", (i) => i.gains ?? "—"],
+    ["głośność", (i) => i.volume ?? "—"],
+    ["preset", (i) => i.preset ?? "—"],
     ["kontekst", (i) => (i.ctxLost ? "utracony" : "ok")],
   ]],
 ];

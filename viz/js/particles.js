@@ -18,6 +18,9 @@
 //
 // Zero zależności od FPS: wszystko dt-owane, pula stała (MAX), jeden draw call.
 import * as THREE from "three";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+const DEF = PRESETS[DEFAULT_PRESET].spark;
 
 const MAX = 48;              // pula na obie strony — zapas na gęste fragmenty
 const LIFE = [2.0, 3.0];     // życie (s)
@@ -27,9 +30,10 @@ const CORE_Y = 0.3;          // środek kuli (core.js: mesh.position.y)
 const FLOOR = 0.20;          // nie zapada się pod ziemię
 
 // Paleta iskier: ciemny żar → złoto → biały żar (sterowana centroidem „inne").
-const COLD = [1.00, 0.24, 0.03]; // ciemne widmo (pad, niski synth)
-const MID = [1.00, 0.62, 0.22];  // środek skali — złoto
-const WARM = [1.00, 0.96, 0.88]; // jasne widmo (arp, hi-hat) — biały żar
+// Trzystopniowa paleta iskry (preset ją przefarbowuje — patrz setPalette).
+let COLD = DEF.cold.slice(); // ciemne widmo (pad, niski synth)
+let MID = DEF.mid.slice();   // środek skali
+let WARM = DEF.warm.slice(); // jasne widmo (arp, hi-hat)
 
 const VERT = /* glsl */ `
 attribute float aSize;
@@ -162,6 +166,15 @@ export class Sparks {
     this.alpha[i] = 0;
     this.phase[i] = Math.random() * Math.PI * 2;
     this.spawned++;
+  }
+
+  // Preset barwy iskier: ciemny / środkowy / jasny koniec widma.
+  // Trzymamy je jako liczby (nie THREE.Color), bo spawn leci po 3 składowe
+  // na drobinę — kolor jest wtedy zwykłą interpolacją bez alokacji.
+  setPalette({ cold, mid, warm }) {
+    COLD = cold.slice();
+    MID = mid.slice();
+    WARM = warm.slice();
   }
 
   reset() {

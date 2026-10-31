@@ -1,7 +1,10 @@
 // System 5: ATMOSFERA — kopuła nieba z gradientem (chmury prawie niewidoczne),
 // gwiazdy na niebie i 8 hero bokeh-iskier od onsetów bębnów.
 import * as THREE from "three";
-import { NOISE_GLSL, PAL } from "./glsl.js";
+import { NOISE_GLSL } from "./glsl.js";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+const DEF = PRESETS[DEFAULT_PRESET]; // wartości startowe = preset domyślny
 
 // ---------- kopuła nieba ----------
 const SKY_VERT = /* glsl */ `
@@ -79,9 +82,9 @@ export class Atmosphere {
 
     // niebo
     this.skyU = {
-      uTop: { value: new THREE.Color(PAL.skyTop) },
-      uHorizon: { value: new THREE.Color(PAL.skyHorizon) },
-      uGlow: { value: new THREE.Color(PAL.gold) },
+      uTop: { value: new THREE.Color(DEF.pal.skyTop) },
+      uHorizon: { value: new THREE.Color(DEF.pal.skyHorizon) },
+      uGlow: { value: new THREE.Color(DEF.pal.gold) },
       uTime: { value: 0 },
     };
     const sky = new THREE.Mesh(
@@ -147,8 +150,8 @@ export class Atmosphere {
       uTime: { value: 0 },
       uScale: { value: 1 },
       uTwinkle: { value: 0.18 },
-      uWarm: { value: new THREE.Color(PAL.cream) },
-      uCool: { value: new THREE.Color(PAL.goldBright) },
+      uWarm: { value: new THREE.Color(DEF.stars.warm) },
+      uCool: { value: new THREE.Color(DEF.stars.cool) },
     };
     const stars = new THREE.Points(
       sg,
@@ -171,6 +174,16 @@ export class Atmosphere {
   }
 
   // rozmiar gwiazd w CSS px niezależnie od DPR bufora
+  // Preset barwy nieba i gwiazd (uGlow = łuna nad horyzontem).
+  setPalette({ top, horizon, glow, warm, cool }) {
+    const s = this.skyU, t = this.starU;
+    s.uTop.value.setHex(top);
+    s.uHorizon.value.setHex(horizon);
+    s.uGlow.value.setHex(glow);
+    t.uWarm.value.setHex(warm);
+    t.uCool.value.setHex(cool);
+  }
+
   setPixelRatio(r) {
     this.starU.uScale.value = Math.min(Math.max(r, 1), 2);
   }

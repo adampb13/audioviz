@@ -99,15 +99,6 @@ vec3 applyFog(vec3 color, float dist){
 }
 `;
 
-// Paleta sceny (z obrazu referencyjnego, MedianCut 8)
-export const PAL = {
-  fog: 0x1a0f08,
-  groundLo: 0x1a0f08,
-  groundHi: 0x3d2410,
-  gold: 0xd9984a,
-  goldBright: 0xffcf8a,
-  cream: 0xfff3d6,
-  ember: 0x7a3000,
-  skyTop: 0x0a0603,
-  skyHorizon: 0x4a2b12,
-};
+// Paleta sceny mieszka w palette.js (PRESETY barwy: złoty / neonowy / deep blue /
+// zielony). Trzymanie tu drugiej, zaszytej palety dawało dwie prawdy o kolorze —
+// zmiana presetu przestawiała scenę, ale zostawiała stare wartości w konstruktorach.

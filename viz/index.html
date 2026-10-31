@@ -6,32 +6,41 @@
 <link rel="icon" href="data:,">
 <title>audioviz — pustynna fala światła</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #060301; overflow: hidden;
+  /* Paleta interfejsu sterowana presetem barwy sceny (palette.js ustawia te
+     zmienne na :root). Dzięki temu panel i HUD nie zostają w złocie, gdy scena
+     jest niebieska — jedna tonacja dla obrazu i UI. */
+  :root {
+    --acc: var(--acc);  --acc-rgb: 217, 152, 74;
+    --acc2: var(--acc2); --acc2-rgb: 255, 207, 138;
+    --txt-rgb: 236, 223, 200;
+    --ink-rgb: 9, 5, 2;
+  }
+  html, body { margin: 0; height: 100%; background: rgb(var(--ink-rgb)); overflow: hidden;
     font-family: system-ui, "Segoe UI", sans-serif; color: #ecdfc8; }
   canvas { display: block; position: fixed; inset: 0; }
   #overlay { position: fixed; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 16px;
-    background: rgba(6,3,1,.55); transition: opacity .6s; z-index: 2; }
+    background: rgba(var(--ink-rgb),.55); transition: opacity .6s; z-index: 2; }
   #overlay.hidden { opacity: 0; pointer-events: none; }
   #overlay small { opacity: .55; letter-spacing: .05em; }
   button { font: inherit; font-size: 18px; letter-spacing: .25em; padding: 14px 40px;
-    border-radius: 999px; border: 1px solid #d9984a; background: transparent; color: #ffcf8a;
-    cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(217,152,74,.25); }
-  button:hover { background: rgba(217,152,74,.12); }
+    border-radius: 999px; border: 1px solid var(--acc); background: transparent; color: var(--acc2);
+    cursor: pointer; text-transform: uppercase; box-shadow: 0 0 24px rgba(var(--acc-rgb),.25); }
+  button:hover { background: rgba(var(--acc-rgb),.12); }
   /* ---------- panel H: wszystkie parametry „inne" jako słupki ---------- */
   #hud { position: fixed; left: 46px; bottom: 44px; z-index: 1;
     width: min(752px, calc(100vw - 96px));
     max-height: min(76vh, 720px); overflow-y: auto; overscroll-behavior: contain;
     display: flex; flex-direction: column; /* nagłówek + dwie kolumny treści */
     box-sizing: border-box; padding: 9px 11px 10px; border-radius: 13px;
-    background: rgba(9,5,2,.55); backdrop-filter: blur(11px) saturate(125%);
+    background: rgba(var(--ink-rgb),.55); backdrop-filter: blur(11px) saturate(125%);
     -webkit-backdrop-filter: blur(11px) saturate(125%);
-    border: 1px solid rgba(217,152,74,.13);
-    box-shadow: 0 16px 46px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,207,138,.045);
-    font: 10px/1.35 ui-monospace, Consolas, monospace; color: rgba(236,223,200,.7);
+    border: 1px solid rgba(var(--acc-rgb),.13);
+    box-shadow: 0 16px 46px rgba(0,0,0,.46), inset 0 1px 0 rgba(var(--acc2-rgb),.045);
+    font: 10px/1.35 ui-monospace, Consolas, monospace; color: rgba(var(--txt-rgb),.7);
     opacity: .94; transition: opacity .22s ease, transform .22s ease, left .22s ease; }
   #hud::-webkit-scrollbar { width: 5px; }
-  #hud::-webkit-scrollbar-thumb { background: rgba(217,152,74,.22); border-radius: 3px; }
+  #hud::-webkit-scrollbar-thumb { background: rgba(var(--acc-rgb),.22); border-radius: 3px; }
   #hud::-webkit-scrollbar-track { background: transparent; }
   /* sekcja jednej ścieżki — nie rozrywa się między kolumnami */
   #hud .cols { display: flex; gap: 20px; align-items: flex-start; }
@@ -40,50 +49,50 @@
   #hud .pstm:last-child { margin-bottom: 0; }
   #hud .sh { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
     font-size: 8.5px; letter-spacing: .16em; text-transform: uppercase;
-    color: rgba(255,207,138,.8); padding: 4px 0 3px; margin-bottom: 3px;
-    border-top: 1px solid rgba(217,152,74,.14); cursor: pointer; user-select: none; }
-  #hud .sh .nm { color: #ffcf8a; white-space: nowrap; }
-  #hud .sh .rl { font-size: 7.5px; letter-spacing: .1em; color: rgba(255,207,138,.33);
+    color: rgba(var(--acc2-rgb),.8); padding: 4px 0 3px; margin-bottom: 3px;
+    border-top: 1px solid rgba(var(--acc-rgb),.14); cursor: pointer; user-select: none; }
+  #hud .sh .nm { color: var(--acc2); white-space: nowrap; }
+  #hud .sh .rl { font-size: 7.5px; letter-spacing: .1em; color: rgba(var(--acc2-rgb),.33);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
   #hud .pstm.fold > .sb, #hud .pstm.dbg.fold > .grp { display: none; }
   #hud .pstm.fold > .sh { opacity: .5; }
   /* wiersz diagnostyczny: etykieta + tekst zamiast słupka */
   #hud .row.kv .lb { width: auto; flex: 0 1 auto; }
   #hud .row.kv .vv { flex: 1 1 auto; text-align: right; font-size: 9.5px;
-    color: rgba(255,207,138,.72); font-variant-numeric: tabular-nums;
+    color: rgba(var(--acc2-rgb),.72); font-variant-numeric: tabular-nums;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #hud.off { opacity: 0; transform: translateY(6px); pointer-events: none; }
   /* lista ścieżek otwarta: panel H odsuwa się w prawo, nie zasłania się nawzajem */
   body.panel-open #hud { left: 238px; }
   #hud .hd { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
     font-size: 8.5px; letter-spacing: .13em; text-transform: uppercase;
-    color: rgba(255,207,138,.5); padding-bottom: 6px; margin-bottom: 6px;
-    border-bottom: 1px solid rgba(217,152,74,.11); }
-  #hud .hd span:last-child { letter-spacing: .06em; color: rgba(255,207,138,.34); }
+    color: rgba(var(--acc2-rgb),.5); padding-bottom: 6px; margin-bottom: 6px;
+    border-bottom: 1px solid rgba(var(--acc-rgb),.11); }
+  #hud .hd span:last-child { letter-spacing: .06em; color: rgba(var(--acc2-rgb),.34); }
   #hud .grp { margin: 0 0 5px; }
   #hud .grp:last-child { margin-bottom: 0; }
   #hud .gt { font-size: 7.5px; letter-spacing: .22em; text-transform: uppercase;
-    color: rgba(217,152,74,.44); margin: 0 0 3px 1px; }
+    color: rgba(var(--acc-rgb),.44); margin: 0 0 3px 1px; }
   #hud .row { display: flex; align-items: center; gap: 7px; height: 12px; }
   #hud .row.vec { height: 20px; }
-  #hud .lb { flex: none; width: 74px; color: rgba(236,223,200,.52); font-size: 9.5px;
+  #hud .lb { flex: none; width: 74px; color: rgba(var(--txt-rgb),.52); font-size: 9.5px;
     letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* • przy parametrach, które sterują iskrami (peak, centroid) */
   #hud .lb.drv { color: rgba(255,214,150,.92); }
   #hud .lb.drv::after { content: "•"; margin-left: 3px; color: #ffb347; font-size: 11px; }
   #hud .bar { position: relative; flex: 1 1 auto; height: 3px; border-radius: 2px;
-    background: rgba(217,152,74,.09); overflow: hidden; }
+    background: rgba(var(--acc-rgb),.09); overflow: hidden; }
   #hud .bar > i { position: absolute; inset: 0; border-radius: 2px;
     transform: scaleX(0); transform-origin: 0 50%;
-    background: linear-gradient(90deg, rgba(217,152,74,.8), rgba(255,214,150,.95));
-    box-shadow: 0 0 7px rgba(255,207,138,.3); will-change: transform; }
-  #hud .vl { flex: none; width: 54px; font-size: 9.5px; text-align: right; color: rgba(255,207,138,.62);
+    background: linear-gradient(90deg, rgba(var(--acc-rgb),.8), rgba(255,214,150,.95));
+    box-shadow: 0 0 7px rgba(var(--acc2-rgb),.3); will-change: transform; }
+  #hud .vl { flex: none; width: 54px; font-size: 9.5px; text-align: right; color: rgba(var(--acc2-rgb),.62);
     font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
   #hud .strip { flex: 1 1 auto; display: flex; align-items: flex-end; gap: 1px;
     height: 16px; }
   #hud .strip > i { flex: 1 1 0; min-width: 0; height: 100%; border-radius: 1px;
     transform: scaleY(0); transform-origin: 50% 100%;
-    background: linear-gradient(180deg, rgba(255,214,150,.85), rgba(217,152,74,.45));
+    background: linear-gradient(180deg, rgba(255,214,150,.85), rgba(var(--acc-rgb),.45));
     will-change: transform; }
   #err { color: #f88; max-width: 80vw; text-align: center; white-space: pre-wrap; }
 
@@ -91,41 +100,98 @@
   #gear { position: fixed; left: 10px; bottom: 8px; z-index: 3; width: 26px; height: 26px;
     padding: 0; display: grid; place-items: center; border-radius: 50%;
     font-size: 0; letter-spacing: 0; text-transform: none;
-    border: 1px solid rgba(217,152,74,.16); background: rgba(6,3,1,.28);
-    color: rgba(255,207,138,.42); box-shadow: none; opacity: .8;
+    border: 1px solid rgba(var(--acc-rgb),.16); background: rgba(var(--ink-rgb),.3);
+    color: rgba(var(--acc2-rgb),.42); box-shadow: none; opacity: .8;
     transition: color .25s, border-color .25s, background .25s, opacity .25s; }
   #gear svg { width: 13px; height: 13px; display: block; }
-  #gear:hover, #gear.open { color: rgba(255,207,138,.92); border-color: rgba(217,152,74,.44);
-    background: rgba(30,17,6,.5); opacity: 1; }
+  #gear:hover, #gear.open { color: rgba(var(--acc2-rgb),.92); border-color: rgba(var(--acc-rgb),.44);
+    background: rgba(var(--acc-rgb),.1); opacity: 1; }
   #panel { position: fixed; left: 10px; bottom: 40px; z-index: 3; width: 214px;
     padding: 10px 11px 8px; border-radius: 12px; box-sizing: border-box;
-    background: rgba(10,6,2,.6); -webkit-backdrop-filter: blur(10px) saturate(120%);
+    background: rgba(var(--ink-rgb),.62); -webkit-backdrop-filter: blur(10px) saturate(120%);
     backdrop-filter: blur(10px) saturate(120%);
-    border: 1px solid rgba(217,152,74,.15); box-shadow: 0 14px 44px rgba(0,0,0,.5);
-    font: 11px/1.3 ui-monospace, Consolas, monospace; color: rgba(236,223,200,.82);
+    border: 1px solid rgba(var(--acc-rgb),.15); box-shadow: 0 14px 44px rgba(0,0,0,.5);
+    font: 11px/1.3 ui-monospace, Consolas, monospace; color: rgba(var(--txt-rgb),.82);
     opacity: 0; transform: translateY(6px); pointer-events: none;
     transition: opacity .22s ease, transform .22s ease; }
   #panel.open { opacity: 1; transform: none; pointer-events: auto; }
   #panel .t { font-size: 9px; letter-spacing: .2em; text-transform: uppercase;
-    color: rgba(217,152,74,.5); margin: 0 0 7px 3px; }
+    color: rgba(var(--acc-rgb),.5); margin: 0 0 7px 3px; }
   .stem { display: flex; align-items: center; gap: 7px; padding: 4px 5px; border-radius: 7px;
     cursor: pointer; user-select: none; outline: none;
     transition: background .16s, opacity .16s; }
-  .stem:hover, .stem:focus-visible { background: rgba(217,152,74,.08); }
-  .stem .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: #ffcf8a;
-    box-shadow: 0 0 8px rgba(255,207,138,.55); transition: background .16s, box-shadow .16s; }
+  .stem:hover, .stem:focus-visible { background: rgba(var(--acc-rgb),.08); }
+  .stem .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--acc2);
+    box-shadow: 0 0 8px rgba(var(--acc2-rgb),.55); transition: background .16s, box-shadow .16s; }
   .stem .n { flex: 1; letter-spacing: .05em; }
-  .stem .h { font-size: 9px; color: rgba(217,152,74,.4); }
+  .stem .h { font-size: 9px; color: rgba(var(--acc2-rgb),.42); }
   .stem.off { opacity: .42; }
-  .stem.off .dot { background: rgba(217,152,74,.3); box-shadow: none; }
+  .stem.off .dot { background: rgba(var(--acc-rgb),.3); box-shadow: none; }
   .stem.off .n { text-decoration: line-through; }
   #panel .foot { margin-top: 6px; padding-top: 6px; display: flex; align-items: center;
-    justify-content: space-between; gap: 8px; border-top: 1px solid rgba(217,152,74,.11);
-    font-size: 8.5px; white-space: nowrap; color: rgba(217,152,74,.34); }
+    justify-content: space-between; gap: 8px; border-top: 1px solid rgba(var(--acc-rgb),.11);
+    font-size: 8.5px; white-space: nowrap; color: rgba(var(--acc-rgb),.34); }
   #panel .foot button { all: unset; cursor: pointer; font-size: 9px; letter-spacing: .12em;
-    color: rgba(217,152,74,.6); text-transform: uppercase; }
-  #panel .foot button:hover { color: #ffcf8a; }
+    color: rgba(var(--acc-rgb),.6); text-transform: uppercase; }
+  #panel .foot button:hover { color: var(--acc2); }
   #panel .foot + .foot { margin-top: 2px; padding-top: 0; border-top: 0; }
+  /* ---------- głośność ogólna ---------- */
+  /* Suwak rysowany na własnym torze, bo natywny nie przyjmuje akcentu presetu.
+     Wypełnienie idzie przez --fill (procent ustawiany w settings.js), więc
+     kolor postępu to zawsze --acc, a nie systemowy niebieski. */
+  #panel .rng { border-top: 1px solid rgba(var(--acc-rgb),.11); margin-top: 5px;
+    padding-top: 7px; }
+  #panel .rl { display: flex; align-items: baseline; justify-content: space-between;
+    font-size: 8.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: rgba(var(--acc-rgb),.4); margin: 0 3px; }
+  #panel .rv { color: rgba(var(--acc2-rgb),.78); letter-spacing: .04em;
+    font-variant-numeric: tabular-nums; }
+  #panel input[type=range] { -webkit-appearance: none; appearance: none; display: block;
+    width: calc(100% - 6px); margin: 4px 3px 2px; height: 12px; background: transparent;
+    cursor: pointer; outline: none; }
+  #panel input[type=range]::-webkit-slider-runnable-track { height: 2px; border-radius: 2px;
+    background: linear-gradient(90deg, var(--acc) 0 var(--fill,100%),
+      rgba(var(--acc-rgb),.15) var(--fill,100%) 100%); }
+  #panel input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 9px;
+    height: 9px; margin-top: -3.5px; border-radius: 50%; background: var(--acc2);
+    border: 0; box-shadow: 0 0 8px rgba(var(--acc-rgb),.55);
+    transition: transform .14s ease, box-shadow .14s ease; }
+  #panel input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.18); }
+  #panel input[type=range]:active::-webkit-slider-thumb { transform: scale(1.05);
+    box-shadow: 0 0 12px rgba(var(--acc-rgb),.8); }
+  #panel input[type=range]:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 2px rgba(var(--acc-rgb),.3), 0 0 8px rgba(var(--acc-rgb),.55); }
+  /* Firefox: te same dwa elementy pod inną nazwą */
+  #panel input[type=range]::-moz-range-track { height: 2px; border-radius: 2px;
+    background: rgba(var(--acc-rgb),.15); }
+  #panel input[type=range]::-moz-range-progress { height: 2px; border-radius: 2px;
+    background: var(--acc); }
+  #panel input[type=range]::-moz-range-thumb { width: 9px; height: 9px; border: 0;
+    border-radius: 50%; background: var(--acc2);
+    box-shadow: 0 0 8px rgba(var(--acc-rgb),.55); }
+
+  /* ---------- preset barwy ---------- */
+  #panel .phead { display: flex; align-items: baseline; justify-content: space-between;
+    margin: 0 3px 6px; padding-top: 7px; border-top: 1px solid rgba(var(--acc-rgb),.11);
+    font-size: 8.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: rgba(var(--acc-rgb),.4); }
+  #panel .pv { color: rgba(var(--acc2-rgb),.8); letter-spacing: .04em; text-transform: none; }
+  #panel .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 0 3px 8px; }
+  #panel .sw { all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px;
+    padding: 4px 6px; border-radius: 8px; border: 1px solid rgba(var(--acc-rgb),.12);
+    transition: background .16s, border-color .16s; }
+  #panel .sw:hover { background: rgba(var(--acc-rgb),.07); }
+  #panel .sw:focus-visible { border-color: rgba(var(--acc-rgb),.5); }
+  /* Kropka próbki: pełny kolor akcentu (gradient z --b spierał złoto do bieli
+     i „złoty" wyglądał jak biały) + wewnętrzny highlight zamiast blasku. */
+  #panel .sw .chip { width: 9px; height: 9px; border-radius: 50%; flex: none;
+    background: var(--a);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,.35), 0 0 6px var(--a); }
+  #panel .sw .sl { font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    color: rgba(var(--acc-rgb),.5); white-space: nowrap; }
+  #panel .sw[aria-checked=true] { background: rgba(var(--acc-rgb),.1);
+    border-color: rgba(var(--acc-rgb),.34); }
+  #panel .sw[aria-checked=true] .sl { color: var(--acc2); }
 </style>
 <script type="importmap">
 {
@@ -139,7 +205,7 @@
 <body>
 <div id="overlay">
   <button id="start">Start</button>
-  <small>Spacja: pauza · H: info · S: ścieżki · utwór: ?track=nazwa</small>
+  <small>Spacja: pauza · H: parametry · S: ustawienia · utwór: ?track=nazwa</small>
   <div id="err"></div>
 </div>
 <div id="hud"></div>

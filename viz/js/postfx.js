@@ -6,6 +6,9 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { PRESETS, DEFAULT_PRESET } from "./palette.js";
+
+const DEF = PRESETS[DEFAULT_PRESET]; // wartości startowe = preset domyślny
 
 const GradeShader = {
   uniforms: {
@@ -14,7 +17,10 @@ const GradeShader = {
     uCA: { value: 0.0012 },      // aberracja chromatyczna na obrzeżach
     uVig: { value: 0.34 },       // siła winiety
     uGrain: { value: 0.010 },    // ziarno: max 0.025 (audit v2) — ledwo wyczuwalne
-    uLift: { value: 0.032 },     // podbicie cieni ku brązowej mgle (jak w referencji)
+    uLift: { value: 0.032 },     // podbicie cieni ku mgle sceny (jak w referencji)
+    // Barwa tego podbicia — z presetu. Zaszyte vec3 trzymało cienie w brązie
+    // także wtedy, gdy cała scena była niebieska czy zielona.
+    uLiftTint: { value: new THREE.Color().fromArray(DEF.lift) },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -27,6 +33,7 @@ const GradeShader = {
     precision highp float;
     uniform sampler2D tDiffuse;
     uniform float uTime, uCA, uVig, uGrain, uLift;
+    uniform vec3 uLiftTint;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -49,7 +56,7 @@ const GradeShader = {
 
       // ciepła korekta + mgła w cieniach (czernie idą ku brązowi, zero czystej czerni)
       col *= vec3(1.05, 0.99, 0.90);
-      col += vec3(1.0, 0.62, 0.34) * uLift * (1.0 - smoothstep(0.0, 0.45, col.g + col.r));
+      col += uLiftTint * uLift * (1.0 - smoothstep(0.0, 0.45, col.g + col.r));
 
       // winieta
       col *= 1.0 - uVig * smoothstep(0.15, 0.62, r2);
@@ -87,5 +94,7 @@ export function createPost(renderer, scene, camera) {
   composer.addPass(grade);
 
   composer.addPass(new OutputPass());
-  return { composer, bloom, grade };
+  // preset: barwa podbicia cieni (jedyny element gradingu zależny od palety)
+  const setPalette = ({ lift }) => grade.uniforms.uLiftTint.value.fromArray(lift);
+  return { composer, bloom, grade, setPalette };
 }
