@@ -32,6 +32,10 @@ import { NOISE_GLSL } from "./glsl.js";
 const DISP_GLSL = /* glsl */ `
 uniform float uFlow;     // SKUMULOWANA faza falowania (JS: += dt * tempo)
 uniform float uStruct;   // 0..1 — obecność basu: gęstsze, głębsze falowanie
+uniform float uWobble;   // amplituda gładkiego falowania (JS)
+uniform float uSpike;    // 0..1 — WYŁĄCZNIE najmocniejsze uderzenia basu
+uniform float uSpikeLen; // długość igieł w jednostkach świata
+
 float dispAt(vec3 n) {
   // Faza jest CAŁKOWANA w JS, a nie liczona jako uTime * tempo: przy zmianie
   // tempa (bas wchodzi) uTime * k przeskakiwałoby o kilkadziesiąt jednostek
@@ -44,20 +48,50 @@ float dispAt(vec3 n) {
   d += snoise(n * (nf * 1.60) + vec3(tt * 0.45, tt * 0.28, 0.0)) * 0.12;
   return d * amp;
 }
+
+// IGLY — powierzchnia przechodzi w stożki przy najmocniejszych basach.
+// Pole jest JEDNYM szumem podniesionym do potęgi (nie progiem): wierzchołki
+// siedzą tam, gdzie szum jest blisko 1, a im wyższa potęga, tym węższe stożki
+// i więcej „płaskiej" powierzchni między nimi. Dzięki temu nie ma przeskoków —
+// igły WYRASTAJĄ z falowania (uSpike rośnie gładko, faza płynie dalej tym samym
+// uFlow), a między uderzeniami pole wraca do miękkich garbów, nie do siatki.
+// Druga oktawa (2.13×) daje drobne igły na plecach większych — inaczej kula
+// wyglądała jak rzep, a nie jak iglasta powierzchnia.
+float spikeAt(vec3 n) {
+  if (uSpike < 0.002) return 0.0;
+  // Częstotliwość ~3.3 daje ~10 stożków na widoczną półkulę, czyli ~7 wierzchołków
+  // siatki na stożek — przy 144 segmentach to minimum, żeby grot był gładki,
+  // a nie postrzępiony. Wyższa potęga (6.0) zwężała groty do 1 wierzchołka
+  // i igły znikały w aliasingu sylwetki.
+  vec3 q = n * 7.2 + vec3(0.0, uFlow * 0.24, uFlow * 0.14);
+  // Samo "pow(noise, k)" nie działało: snoise rzadko dochodzi do 1.0, więc po
+  // podniesieniu do potęgi igły miały 5-10% zamierzonej długości (kula tylko
+  // się marszczyła). smoothstep rozciąga GÓRNĄ część rozkładu na pełny zakres
+  // 0..1, a potęga zwęża groty — dopiero to daje stożki o realnej wysokości.
+  float a = smoothstep(0.24, 0.62, snoise(q));
+  float b = smoothstep(0.30, 0.70, snoise(q * 1.72 + vec3(19.7, 4.3, 11.1)));
+  float c = smoothstep(0.34, 0.74, snoise(q * 2.85 + vec3(5.5, 23.1, 2.7)));
+  float sa = a * a * a * a * a;
+  float sb = b * b * b * 0.22;
+  float sc = c * c * 0.14;
+  return (sa + sb + sc) * uSpike;
+}
 `;
 
 const VERT = /* glsl */ `
-uniform float uWobble;   // uFlow, uStruct deklaruje DISP_GLSL poniżej
+// uFlow, uStruct, uWobble, uSpike, uSpikeLen deklaruje DISP_GLSL poniżej
 varying vec3 vN;
 varying vec3 vWorld;
 varying vec3 vObj;
 varying float vDisp;
+varying float vSpike;    // 0..~1.4 — do podświetlenia grotów w FRAG
 ${NOISE_GLSL}
 ${DISP_GLSL}
 void main() {
   vec3 n = normalize(position);
   float d0 = dispAt(n);
-  vec3 p = position + n * d0 * uWobble;
+  float s0 = spikeAt(n);
+  vec3 p = position + n * (d0 * uWobble + s0 * uSpikeLen);
 
   // Normalna z gradientu pola przemieszczenia (różnice skończone po stycznych):
   // bez tego fałdy widać tylko na sylwetce, a światło ich nie łapie.
@@ -71,10 +105,22 @@ void main() {
   // tłumienie dużych gradientów: bez niego normalna „przestrzeliwuje" i na kuli
   // pojawiają się ostre, wielokątne crease'y zamiast miękkiego falowania
   float damp = 1.0 / (1.0 + length(grad) * 0.8);
-  vec3 nP = normalize(n - grad * (uWobble * 1.60) * damp);
+  // Gradient igieł liczę OSOBNO i bez tłumienia: przy igłach chcemy właśnie
+  // ostrej normalnej (groty łapią światło), a tłumienie wypłaszczało je do
+  // „stożków z plasteliny”. 0.55 to tylko zabezpieczenie przed przeprostem.
+  vec3 gradS = vec3(0.0);
+  if (uSpike > 0.002) {
+    float sa0 = spikeAt(n);
+    float sa1 = spikeAt(normalize(n + ta * e));
+    float sb1 = spikeAt(normalize(n + tb * e));
+    gradS = ta * ((sa1 - sa0) / e) + tb * ((sb1 - sa0) / e);
+    gradS = clamp(gradS, -4.0, 4.0);
+  }
+  vec3 nP = normalize(n - grad * (uWobble * 1.60) * damp - gradS * (uSpikeLen * 0.55));
 
   vObj = n;
   vDisp = d0;
+  vSpike = s0;
   vN = normalize(normalMatrix * nP);
   vec4 wp = modelMatrix * vec4(p, 1.0);
   vWorld = wp.xyz;
@@ -93,11 +139,13 @@ const float GAIN = 0.50;    // jasność bazowa
 const float HOT = 0.50;     // temperatura górnego końca (bursztyn <-> krem)
 uniform float uGlow;   // 0..1 — energia całości: złoto -> rozświetlona
 uniform float uStruct;  // struktura basu (ta sama wartość co w VERT)
+uniform float uSpike;   // 0..1 — igły: przy nich lustro kuli przygasa
 // Paleta żaru (presety barwy, palette.js). Trzy pary zamiast zaszytych vec3:
 // deepA/deepB = cień powłoki (cicho -> głośno), hotA/hotB = górny koniec,
 // hotC = domieszka przy pełnym rozświetleniu.
 uniform vec3 uDeepA, uDeepB, uHotA, uHotB, uHotC;
 varying float vDisp;    // przemieszczenie z VERT — jasność garby/doliny
+varying float vSpike;   // pole igieł z VERT — groty świecą mocniej
 varying vec3 vObj;
 varying vec3 vN;
 varying vec3 vWorld;
@@ -124,10 +172,21 @@ void main() {
   // Jasność idzie ZA tym samym polem, które wypycha wierzchołki (vDisp), więc
   // garby łapią światło, a doliny zostają ciemniejsze — czyta się jak powłoka,
   // a nie jak plamy na kuli.
-  float relief = 1.0 + vDisp * (0.52 * uStruct);
-  relief = clamp(relief, 0.65, 1.40);
+  // groty igieł: własne, węższe wzmocnienie (pole spike ma wąskie szczyty, więc
+  // podświetlają się tylko końce — reszta powierzchni zostaje ciemna i spokojna)
+  float tip = clamp(vSpike * 1.30, 0.0, 1.0);
+  // światło kluczowe dla grotów (w przestrzeni widoku, z góry-lewej): stożki są
+  // wtedy modelowane światłem, a nie płaskie — bez tego igły czytały się jak
+  // wycięte płetwy w jednym kolorze. Reszta kuli nadal świeci własnym żarem.
+  float lam = clamp(dot(N, normalize(vec3(-0.34, 0.72, 0.60))), 0.0, 1.0);
+  base = mix(base, uHotC, tip * (0.10 + 0.26 * lam));
+  float relief = 1.0 + vDisp * (0.52 * uStruct) + tip * (0.30 + 0.95 * lam);
+  relief = clamp(relief, 0.65, 1.85);
   // głośno: mocniejszy brzeg (rozświetlona obwódka) i wyższy gain
-  vec3 col = base * (0.72 + fres * (0.85 + 0.30 * G)) * (GAIN + 0.16 * G) * relief;
+  // Przy igłach samo lustro kuli przygasa: bez tego groty i tło miały tę samą
+  // jasność i kolce czytały się tylko po sylwetce. Doliny ciemnieją, groty nie.
+  float body = 1.0 - 0.20 * uSpike * (1.0 - tip);
+  vec3 col = base * (0.72 + fres * (0.85 + 0.30 * G)) * (GAIN + 0.16 * G) * relief * body;
   // miękki sufit: żar trzyma się PONIŻEJ odbarwienia — ACES nie myje go do bieli
   float cap = 0.78 + 0.10 * G;
   col = cap * tanh(col / cap);
@@ -162,11 +221,17 @@ export class CoreSphere {
   constructor() {
     this.group = new THREE.Group();
 
-    const geo = new THREE.SphereGeometry(R_BASE, 144, 144); // gęsta siatka: fałdy gładkie, bez faset
+    // Ikosfera zamiast siatki sferycznej: wierzchołki są ROZŁOŻONE RÓWNOMIERNIE
+    // (siatka sferyczna ma bieguny, gdzie igły zlepiały się w plamę), a przy
+    // detail=6 mamy 40 962 wierzchołki, czyli odstęp ~0.016 j. — dość, żeby grot
+    // igły miał 3-4 wierzchołki i nie rozsypywał się w aliasing.
+    const geo = new THREE.IcosahedronGeometry(R_BASE, 6);
     this.uniforms = {
       uFlow: { value: 0 },
       uWobble: { value: 0.03 },
       uStruct: { value: 0 },
+      uSpike: { value: 0 },
+      uSpikeLen: { value: 0.42 },
       uGlow: { value: 0 },
       // paleta (nadpisywana przez setPalette przy zmianie presetu)
       uDeepA: { value: new THREE.Color().fromArray(DEF.core.deepA) },
@@ -204,6 +269,8 @@ export class CoreSphere {
 
     // obwiednie (czysto JS)
     this.bass = 0;  // CIĄGŁA, wygładzona obecność basu (struktura)
+    this.spike = 0;     // 0..1 — igły: TYLKO najmocniejsze uderzenia basu
+    this.bassSlow = 0;  // wolna obwiednia basu: punkt odniesienia dla „rise"
     this.flow = 0;  // skumulowana faza falowania powłoki (całka tempa)
     this.pulse = 0; // puls od uderzenia w bębny (rozmiar, szybki ale gładki)
     this.scale = 1; // wygładzony rozmiar bazowy (z energii całości)
@@ -270,6 +337,34 @@ export class CoreSphere {
     const q = Math.min(1, Math.max(0, (this.bass - st0) / (st1 - st0)));
     const bassG = q * q * (3 - 2 * q);
     this.uniforms.uStruct.value = bassG;
+    // IGLY — próg na SAMYM szczycie basu (0.86 → 0.985), liczony z SUROWEGO
+    // sygnału, nie z wygładzonego this.bass: obwiednia struktury ma atak 62 ms,
+    // więc szczyt trwający 100 ms zdążyłby się w niej spłaszczyć do ~0.8 i igły
+    // nigdy by się nie włączyły. W utworze jest 112 biegów basu > p95, mediana
+    // 0.1 s, najdłuższy 0.6 s — próg trafia dokładnie w te uderzenia.
+    // Wyjście idzie przez własną obwiednię (atak 26/s, powrót 3.4/s): igły
+    // wyrastają w ~40 ms i opadają ~300 ms, więc między uderzeniami kula zdąża
+    // wrócić do miękkiego falowania i nie „trzepocze".
+    // Próg jest DWUCZŁONOWY, bo sam poziom nie wystarcza: w głośnym dropie bas
+    // siedzi przy p95 przez kilka taktów i igły zostałyby włączone na stałe
+    // (57% próbek > 0.5 w pomiarze). Dlatego igły zapala UDERZENIE, nie poziom:
+    // „rise" = jak bardzo bas jest wyżej niż jego własna wolna obwiednia
+    // (~0.5 s), a "lvl" = czy w ogóle jest głośno. W ustabilizowanej głośnej
+    // sekcji rise ≈ 0, więc kula wraca do miękkiego falowania i tylko realne
+    // akcenty ją „najeżają".
+    const kbS = bassEnv > this.bassSlow ? 2.2 : 1.6;
+    this.bassSlow += (bassEnv - this.bassSlow) * (1 - Math.exp(-dt * kbS));
+    const rise = Math.max(0, bassEnv - this.bassSlow);
+    const sstep = (x, a, b) => {
+      const q = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return q * q * (3 - 2 * q);
+    };
+    const spikeT = sstep(bassEnv, 0.70, 0.90) * sstep(rise, 0.05, 0.20);
+    // atak 16/s (~60 ms: igły WYRASTAJĄ w 3-4 klatkach, widać sam wzrost),
+    // powrót 3.2/s (~310 ms: opadają płynnie, zanim wejdzie następne)
+    const ks = spikeT > this.spike ? 16.0 : 3.2;
+    this.spike += (spikeT - this.spike) * (1 - Math.exp(-dt * ks));
+    this.uniforms.uSpike.value = this.spike;
     // faza falowania całkowana z tempa: bas przyspiesza płynięcie, ale nigdy
     // nie przeskakuje — wzór i kolejność mają znaczenie (bassG policzony wyżej)
     this.flow += dt * (0.14 + 0.30 * bassG);

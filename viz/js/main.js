@@ -586,6 +586,8 @@ function frame() {
       // poziom każdego elementu audio (głośność ogólna × wyciszenie ścieżki)
       vols: Object.fromEntries(STEM_FILES.map((n) => [n, audio[n] ? +audio[n].volume.toFixed(2) : null])),
       preset: presetKey,
+      // igły kuli (0..1) — do sondy: sprawdzenie, że próg łapie uderzenia
+      spike: +core.spike.toFixed(3),
     };
   }
 }
