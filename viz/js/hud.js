@@ -129,7 +129,6 @@ const DBG = [
     ["głośności", (i) => i.gains ?? "—"],
     ["głośność", (i) => i.volume ?? "—"],
     ["preset", (i) => i.preset ?? "—"],
-    ["igły", (i) => i.spike ?? "—"],
     ["kontekst", (i) => (i.ctxLost ? "utracony" : "ok")],
   ]],
 ];
