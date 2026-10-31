@@ -38,10 +38,13 @@ float dispAt(vec3 n) {
   // i całe pole szumu przetasowywało się w jednej klatce — faktura „przewijała
   // się" dopiero po uderzeniu. Teraz bas tylko przyspiesza płynięcie.
   float tt = uFlow;
-  float nf = 1.15 + uStruct * 0.85;           // 2-3 garby na kulę: 1.15 → 2.00
+  // Niższa częstotliwość niż przy starej amplitudzie: przy 10% przemieszczenia
+  // 2-3 garby robiły z kuli ziemniaka. Mniej, ale większych garbów czyta się
+  // jako „przelewanie" struktury, a nie przypadkowe wybrzuszenia.
+  float nf = 1.25 + uStruct * 0.75;           // 2 -> 3 garby: 1.25 → 2.00
   float amp = 0.45 + 0.80 * uStruct;
   float d = snoise(n * nf + vec3(0.0, tt, 0.0)) * 0.72;
-  d += snoise(n * (nf * 1.60) + vec3(tt * 0.45, tt * 0.28, 0.0)) * 0.12;
+  d += snoise(n * (nf * 1.45) + vec3(tt * 0.45, tt * 0.28, 0.0)) * 0.10;
   return d * amp;
 }
 `;
@@ -70,11 +73,14 @@ void main() {
   vec3 grad = ta * ((da - d0) / e) + tb * ((db - d0) / e);
   // tłumienie dużych gradientów: bez niego normalna „przestrzeliwuje" i na kuli
   // pojawiają się ostre, wielokątne crease'y zamiast miękkiego falowania
-  float damp = 1.0 / (1.0 + length(grad) * 0.8);
+  float damp = 1.0 / (1.0 + length(grad) * 1.1);
   vec3 nP = normalize(n - grad * (uWobble * 1.60) * damp);
 
   vObj = n;
-  vDisp = d0;
+  // vDisp w jednostkach ŚWIATA (pole * amplituda), znormalizowane tak, żeby
+  // dawne maksimum (~4.8% promienia) dawało ~0.6 — dzięki temu cieniowanie
+  // fałd rośnie razem z amplitudą, a nie zostaje na poziomie starej deformacji
+  vDisp = d0 * uWobble * 12.0;
   vN = normalize(normalMatrix * nP);
   vec4 wp = modelMatrix * vec4(p, 1.0);
   vWorld = wp.xyz;
@@ -125,9 +131,17 @@ void main() {
   // garby łapią światło, a doliny zostają ciemniejsze — czyta się jak powłoka,
   // a nie jak plamy na kuli.
   float relief = 1.0 + vDisp * (0.52 * uStruct);
-  relief = clamp(relief, 0.65, 1.40);
+  relief = clamp(relief, 0.52, 1.55);
   // głośno: mocniejszy brzeg (rozświetlona obwódka) i wyższy gain
   vec3 col = base * (0.72 + fres * (0.85 + 0.30 * G)) * (GAIN + 0.16 * G) * relief;
+  // Światło kluczowe NA FAŁDACH (przestrzeń widoku, z góry-lewej): sama
+  // modulacja jasności od głębokości nie wystarcza — przy dużym basie kula
+  // była płaską plamą o nieregularnej sylwetce. Kierunkowy cień na garby
+  // sprawia, że struktura czyta się jako forma, a nie jak wycięta z papieru.
+  // Siła rośnie z głębokością fałdy, więc w ciszy nie ma jej wcale.
+  float lam = clamp(dot(N, normalize(vec3(-0.38, 0.62, 0.68))), 0.0, 1.0);
+  float fold = clamp(abs(vDisp) * 0.9, 0.0, 1.0) * uStruct;
+  col *= mix(1.0, 0.62 + 0.72 * lam, fold);
   // miękki sufit: żar trzyma się PONIŻEJ odbarwienia — ACES nie myje go do bieli
   float cap = 0.78 + 0.10 * G;
   col = cap * tanh(col / cap);
@@ -232,11 +246,14 @@ export class CoreSphere {
   }
 
   update(t, dt, energySmooth, beatPulse, bassEnv) {
-    // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia jest wciąż
-    // wygładzona (atak 16/s ≈ 62 ms, puszczenie 3.6/s ≈ 280 ms), ale na tyle
-    // szybka, że faktura zmienia się RAZEM z basem, a nie pół sekundy po nim;
-    // powrót jest 3.5× wolniejszy, więc kula nie drga na każdym bicie.
-    const kb = bassEnv > this.bass ? 16.0 : 3.6;
+    // STRUKTURA — tylko bas, i WYŁĄCZNIE ciągle. Obwiednia: atak 8/s ≈ 125 ms,
+    // puszczenie 1.4/s ≈ 0.7 s. Szybciej (16/3.6) było dobrze przy deformacji
+    // ~4.8% promienia, ale próbki basu w analizie idą co 0.25 s i w dropie
+    // skaczą 0.99 → 0.03 → 0.99. Przy 14% przemieszczenia kula pompowała więc
+    // między „kalafiorem" a gładką kulą 1-2 razy na sekundę — to już nie
+    // oddychanie, a migotanie. Wolniejsze zejście trzyma kształt przez całą
+    // mocną partię i pozwala mu opaść dopiero, gdy bas naprawdę znika.
+    const kb = bassEnv > this.bass ? 8.0 : 1.4;
     this.bass += (bassEnv - this.bass) * (1 - Math.exp(-dt * kb));
 
     // ROZMIAR — bazowo z energii całości, a na to puls bębnów.
@@ -274,9 +291,14 @@ export class CoreSphere {
     // nie przeskakuje — wzór i kolejność mają znaczenie (bassG policzony wyżej)
     this.flow += dt * (0.14 + 0.30 * bassG);
     this.uniforms.uFlow.value = this.flow;
-    // Amplituda przemieszczenia: spokój 1.4% promienia, pełne fałdy basu ~4.8%.
-    // Bas zmienia TYLKO tę amplitudę — deformacja jest ciągła, bez impulsów.
-    this.uniforms.uWobble.value = 0.014 + bassG * 0.034;
+    // Amplituda przemieszczenia. Bas zmienia TYLKO tę amplitudę — deformacja
+    // jest ciągła, bez impulsów. Składnik kwadratowy jest po to, żeby MOCNE
+    // partie basu odstawały od średnich: liniowo cała zwrotka falowała tak samo
+    // głęboko jak drop, tylko trochę mniej. Teraz spokój to ~1.2% promienia,
+    // średni bas ~4%, a najmocniejsze uderzenia dochodzą do ~10% (pole sięga
+    // ±1.05, więc realne wybrzuszenie to ok. 11% promienia) — kula wyraźnie
+    // „przelewa się" na mocnym basie, ale zostaje gładka (żadnych kolców).
+    this.uniforms.uWobble.value = 0.012 + 0.020 * bassG + 0.105 * bassG * bassG * bassG;
 
     this.mesh.scale.setScalar(scalePulse);
     // światło rzucane na ziemię: słabe i krótkie — kula ma świecić sobą,

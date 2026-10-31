@@ -14,7 +14,7 @@ import { PRESETS, PRESET_ORDER, DEFAULT_PRESET } from "./palette.js";
 export const STEMS = [
   { id: "wokal", label: "wokal", hint: "wstęga" },
   { id: "bas", label: "bas", hint: "struktura kuli" },
-  { id: "bebny", label: "fale", hint: "fale · puls kuli" },
+  { id: "bebny", label: "bębny", hint: "fale na ziemi + puls kuli" },
   { id: "inne", label: "inne", hint: "iskry" },
 ];
 
