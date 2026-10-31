@@ -128,24 +128,24 @@ def _summary_from_analysis(path: Path) -> dict:
 
 def analysis_summary(path: Path) -> dict:
     st = path.stat()
-    key = f"{st.st_mtime_ns}:{st.st_size}"
+    sign = f"{st.st_mtime_ns}:{st.st_size}"   # „podpis” wersji pliku: mtime + rozmiar
     with _META_LOCK:
         cached = _META_CACHE.get(str(path))
-        if cached and cached.get("key") == key:
+        if cached and cached.get("sign") == sign:
             return cached
 
     sidecar = path.with_name("analysis.meta.json")
     if sidecar.is_file():
         try:
             s = json.loads(sidecar.read_text(encoding="utf-8"))
-            if s.get("key") == key:
+            if s.get("sign") == sign:
                 with _META_LOCK:
                     _META_CACHE[str(path)] = s
                 return s
         except (OSError, ValueError):
             pass
 
-    info = {"key": key, "bytes": st.st_size, "mtime": int(st.st_mtime)}
+    info = {"sign": sign, "bytes": st.st_size, "mtime": int(st.st_mtime)}
     try:
         info.update(_summary_from_analysis(path))
     except (OSError, ValueError) as e:  # uszkodzony JSON nie może wywalić listy
