@@ -92,7 +92,7 @@ export const PRESETS = {
   //    błękit (światło), tło granatowo-stalowe. Bez turkusu: turkus + granat
   //    dają „akwarium”, więc akcent trzyma się jednego błękitu o dwóch jasnościach.
   blue: {
-    label: "deep blue",
+    label: "niebieski",
     pal: {
       skyTop: 0x01040c,
       skyHorizon: 0x123a5e,

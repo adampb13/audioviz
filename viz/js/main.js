@@ -23,6 +23,15 @@ const params = new URLSearchParams(location.search);
 // ?debug = sonda + ślad klatek (ring 900 klatek ≈ 6 s przy 144 fps)
 const DEBUG = params.has("debug");
 const TRACK = params.get("track") || "blindinglights";
+// ?track= to NAZWA KATALOGU (slug), nie tytuł — do pokazania na ekranie jest
+// osobna mapa. Wcześniej podpowiedź pod przyciskiem Start miała wpisane na
+// sztywno „utwór: ?track=nazwa", więc po pauzie na ekranie wyglądało to jak
+// nazwa utworu wczytana z adresu. Nowy utwór: dopisz tytuł tutaj (bez wpisu
+// zostanie użyty slug z wielkiej litery).
+const TRACK_TITLES = {
+  blindinglights: "Blinding Lights",
+};
+const TRACK_TITLE = TRACK_TITLES[TRACK] || TRACK.charAt(0).toUpperCase() + TRACK.slice(1);
 const AUDIO_DIR = `../data/${TRACK}/`;
 const FOG_DENSITY = 0.009; // FogExp2 0x1a0f08, 0.009 (audit v2 P0-C)
 
@@ -244,6 +253,8 @@ let fpsI = 0, fpsN = 0;
 const btn = document.getElementById("start");
 const overlay = document.getElementById("overlay");
 const hud = document.getElementById("hud");
+const hintTrack = document.getElementById("hint-track");
+if (hintTrack) hintTrack.textContent = TRACK_TITLE;
 // panel H: WSZYSTKIE parametry wszystkich czterech ścieżek + diagnostyka (hud.js)
 const hudPanel = createHud(track);
 hud.textContent = "";
@@ -557,7 +568,7 @@ function frame() {
         env: S.sparkEnv, bright: S.sparkBright, peak: oPeakPrev,
       },
       dropEnv: S.dropEnv, onsets: S.onsetsFired, bursts: S.bursts, otherHits: S.otherHits,
-      track: TRACK, duration: track.duration,
+      track: TRACK_TITLE, duration: track.duration,
       gains: `w${settings.gain.wokal} b${settings.gain.bas} d${settings.gain.bebny} i${settings.gain.inne}`,
       volume: Math.round(settings.volume * 100) + "%",
       preset: PRESETS[presetKey].label,
@@ -581,7 +592,7 @@ function frame() {
         peak: +oPeakPrev.toFixed(3), env: +S.sparkEnv.toFixed(3),
         bright: +S.sparkBright.toFixed(3), loud: +sparks.lastLoud.toFixed(3),
         tint: [sparks.lastBright, sparks.lastLoud] },
-      ctxLost, track: TRACK,
+      ctxLost, track: TRACK_TITLE,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
       // poziom każdego elementu audio (głośność ogólna × wyciszenie ścieżki)
       vols: Object.fromEntries(STEM_FILES.map((n) => [n, audio[n] ? +audio[n].volume.toFixed(2) : null])),

@@ -99,6 +99,6 @@ vec3 applyFog(vec3 color, float dist){
 }
 `;
 
-// Paleta sceny mieszka w palette.js (PRESETY barwy: złoty / neonowy / deep blue /
+// Paleta sceny mieszka w palette.js (PRESETY barwy: złoty / neonowy / niebieski /
 // zielony). Trzymanie tu drugiej, zaszytej palety dawało dwie prawdy o kolorze —
 // zmiana presetu przestawiała scenę, ale zostawiała stare wartości w konstruktorach.
