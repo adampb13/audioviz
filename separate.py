@@ -7,6 +7,8 @@ Użycie (z korzenia repo):
     .venv/Scripts/python.exe separate.py data/familyties.wav
     .venv/Scripts/python.exe separate.py data/familyties.wav --model htdemucs_ft.yaml
 
+Wymaga audio-separator + onnxruntime + torchaudio (patrz requirements.txt).
+
 Nazwy plików: biblioteka audio-separator zapisuje `<baza>_(Vocals)_wokal.wav`
 itd. — a cały dalszy pipeline (analyze_stems.py, wizualizacja) czyta proste
 `wokal.wav`. Dlatego po separacji pliki są przenoszone pod nazwę docelową.
@@ -30,10 +32,10 @@ def process_audio(file_path: str | Path, model_name: str = MODEL) -> int:
 
     try:
         from audio_separator.separator import Separator
-    except ModuleNotFoundError:
+    except ModuleNotFoundError as exc:
         print(
-            "Błąd: brak modułu audio-separator w tym środowisku.\n"
-            "  .venv/Scripts/python.exe -m pip install audio-separator",
+            f"Błąd: nie mogę zaimportować audio-separator ({exc.name}).\n"
+            "  uv pip install --python .venv/Scripts/python.exe -r requirements.txt",
             flush=True,
         )
         return 3
@@ -84,8 +86,7 @@ def process_audio(file_path: str | Path, model_name: str = MODEL) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("input", nargs="?", default="data/silence.wav",
-                    help="plik audio do podziału (domyślnie data/silence.wav)")
+    ap.add_argument("input", help="plik audio do podziału, np. data/<utwór>.wav")
     ap.add_argument("--model", default=MODEL, help=f"model Demucs (domyślnie {MODEL})")
     a = ap.parse_args()
     return process_audio(a.input, a.model)

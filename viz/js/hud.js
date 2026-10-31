@@ -15,7 +15,7 @@ const STEMS = [
   ["wokal", "wokal", "wstęga · drżenie"],
   ["bas", "bas", "struktura kuli"],
   ["bebny", "bębny", "fale · puls"],
-  ["inne", "inne", "iskry"],
+  ["inne", "inne", "koło rytmu"],
 ];
 
 // Grupowanie 21 pól (ta sama kolejność co w JSON-ie, tylko pogrupowana).
@@ -45,8 +45,9 @@ const SHORT = {
 
 // Pola, które realnie sterują sceną — kropka • i tooltip (main.js → moduły).
 const DRIVES = {
-  "inne.peak": "iskry: gęstość emisji + rozmiar drobiny",
-  "inne.centroid_hz": "iskry: kolor (ciemny żar ↔ biały żar) + wysokość wylotu z kuli",
+  "inne.onset (zdarzenia)": "kręgi na piasku: jedno uderzenie = jeden krąg, więc tempo światła = tempo instrumentów",
+  "inne.onset siła": "kręgi: zasięg i jasność (mocny atak = szeroki, jasny krąg)",
+  "inne.centroid_hz": "kręgi: barwa rejestru — ciemny żar / złoto / jaśniejsze złoto",
   "bas.rms_norm": "struktura kuli: amplituda i tempo falowania powłoki (uStruct/uWobble)",
   "bebny.peak": "fale na ziemi + puls rozmiaru kuli",
   "wokal.rms_norm": "szerokość wstęgi + drżenie powierzchni kuli",
@@ -109,18 +110,21 @@ const DBG = [
     ["energia", (i) => arrow(i.raw?.energy, i.env?.energy)],
     ["tempo", (i) => (i.tempo ? Math.round(i.tempo) + " bpm" : "—")],
   ]],
-  ["iskry", [
-    ["żywe / pula", (i) => `${i.sparks?.alive ?? 0} / ${i.sparks?.pool ?? 0}`],
-    ["wystrzelone", (i) => String(i.sparks?.fired ?? 0)],
-    ["obwiednia", (i) => f3(i.sparks?.env)],
-    ["jasność widma", (i) => f3(i.sparks?.bright)],
-    ["ostatni peak", (i) => f3(i.sparks?.peak)],
+  // koronę czytamy jak miernik rytmu: ile słupków pali się TERAZ, jak szybko
+  // biegnie światło (uderzenia/s) i jak jasne jest widmo ostatniego uderzenia
+  ["korona rytmu", [
+    ["zapalone / 48", (i) => String(i.other?.marks ?? 0)],
+    ["tempo światła", (i) => (i.other?.rate != null ? i.other.rate.toFixed(2) + " /s" : "—")],
+    ["obwiednia", (i) => f3(i.other?.env)],
+    ["jasność widma", (i) => f3(i.other?.bright)],
+    ["ostatni peak", (i) => f3(i.other?.peak)],
   ]],
   ["zdarzenia", [
     ["fale", (i) => String(i.waves ?? 0)],
     ["onsety", (i) => String(i.onsets ?? 0)],
     ["rozbłyski", (i) => String(i.bursts ?? 0)],
     ["trafienia inne", (i) => String(i.otherHits ?? 0)],
+    ["kręgi rytmu", (i) => String(i.wheelMarks ?? 0)],
     ["dropEnv", (i) => f3(i.dropEnv)],
   ]],
   ["utwór / miks", [

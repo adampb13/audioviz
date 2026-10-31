@@ -38,7 +38,7 @@ export function createSettings({
   const btn = document.createElement("button");
   btn.id = "gear";
   btn.type = "button";
-  btn.title = "ustawienia (klawisz S)";
+  btn.title = "ustawienia (klawisz Esc)";
   btn.setAttribute("aria-expanded", "false");
   btn.innerHTML = GEAR;
 
@@ -145,10 +145,13 @@ export function createSettings({
     onRestart();
     togglePanel(false);
   });
+  // Esc otwiera panel i go zamyka — jeden klawisz w obie strony, jak w
+  // większości aplikacji. Wcześniej panel wisiał na „S", które kolidowało
+  // z odruchem zamykania okna.
   window.addEventListener("keydown", (e) => {
-    if (e.repeat) return;
-    if (e.code === "KeyS") togglePanel();
-    else if (e.code === "Escape" && isOpen) togglePanel(false);
+    if (e.repeat || e.code !== "Escape") return;
+    e.preventDefault();
+    togglePanel();
   });
   // klik poza panelem zamyka (ale nie chowa przycisku)
   window.addEventListener("pointerdown", (e) => {

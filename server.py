@@ -187,7 +187,7 @@ def scan_tracks() -> list[dict]:
             aj = p / "analysis.json"
             if aj.is_file():
                 t["analysis"] = analysis_summary(aj)
-        elif p.suffix.lower() in AUDIO_EXT and p.stem != "silence":
+        elif p.suffix.lower() in AUDIO_EXT:
             t = entry(p.stem)
             t["source"] = {
                 "file": p.name,
@@ -321,7 +321,7 @@ def _run_step(job: Job, step: str) -> None:
     if step == "separate" and not CAPS.get("separator"):
         raise RuntimeError(
             "brak modułu audio-separator w tym środowisku — podział na stem'y nie ruszy. "
-            "Zainstaluj: .venv/Scripts/python.exe -m pip install audio-separator  "
+            "Zainstaluj: uv pip install --python .venv/Scripts/python.exe -r requirements.txt  "
             "(albo wgraj gotowe stem'y przyciskiem „wgraj stem'y”)"
         )
     cmd = _cmd_for(step, job.slug)

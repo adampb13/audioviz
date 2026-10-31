@@ -1,7 +1,8 @@
 // Boot sceny "Pustynna Fala Światła".
 // Master clock = element audio wokalu (currentTime). analysis.json = scenariusz.
 // Utwór wybierany parametrem ?track=<nazwa katalogu w ../data> (domyślnie blindinglights).
-// Sterowanie: [SPACJA] start/pauza · [H] HUD · ?demo&t=123 — start bez gestu od 123 s.
+// Sterowanie: [SPACJA] start/pauza · [H] HUD · [Esc] ustawienia ·
+// ?demo&t=123 — start bez gestu od 123 s.
 import * as THREE from "three";
 import { Track, STEM_FILES, EventCursor, sampleAt, damp, clamp } from "./data.js";
 import { Ground } from "./ground.js";
@@ -18,7 +19,7 @@ import { titleFor } from "./titles.js";
 // ale konstruktory muszą dostać sensowne kolory już przy tworzeniu materiałów).
 const DEF = PRESETS[DEFAULT_PRESET];
 import { createHud } from "./hud.js";
-import { Sparks } from "./particles.js";
+import { RhythmWheel } from "./rhythm.js";
 
 const params = new URLSearchParams(location.search);
 // ?debug = sonda + ślad klatek (ring 900 klatek ≈ 6 s przy 144 fps)
@@ -98,11 +99,12 @@ mountains.resize(window.innerWidth / window.innerHeight);
 const atmosphere = new Atmosphere();
 atmosphere.setPixelRatio(renderer.getPixelRatio());
 scene.add(atmosphere.group);
-// Pojedyncze iskry wylatujące Z KULI: jedna drobina na przekroczenie progu `peak`
-// ścieżki „inne" (próg w pętli), naprzemiennie lewa/prawa, start na powłoce sfery
-// i łuk na zewnątrz nad fale. Nie chmura, nie fontanna — rzadki akcent (particles.js).
-const sparks = new Sparks();
-scene.add(sparks.points);
+// Ścieżka „inne" ma JEDEN obraz, zbudowany z RYTMU (zdarzeń), nie z głośności:
+//   • kręgi uderzeń (rhythm.js) — każde uderzenie rozchodzi się po piasku
+//     kręgiem światła; siła daje zasięg, rejestr widma — barwę. Patrząc na
+//     piasek widzisz sekwencję uderzeń, a nie głośność utworu.
+const wheel = new RhythmWheel();
+scene.add(wheel.group);
 
 const post = createPost(renderer, scene, camera);
 
@@ -110,12 +112,12 @@ const post = createPost(renderer, scene, camera);
 // Wszystkie warstwy mają setPalette(); applyPreset rozdaje im nowe kolory,
 // a interfejs dostaje akcenty przez zmienne CSS (--acc/--acc2), więc UI nie
 // zostaje w złocie, gdy scena jest niebieska.
-const sys = { scene, ground, core, ribbon, mountains, atmosphere, sparks, post };
+const sys = { scene, ground, core, ribbon, mountains, atmosphere, wheel, post };
 let presetKey = applyPreset(DEFAULT_PRESET, sys);
 
 // Sonda QA (?debug): dostęp do obiektów sceny dla zrzutów, pomiarów i bisectowania
 if (params.has("debug")) {
-  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere, sparks };
+  window.__dbg = { renderer, scene, camera, post, ground, core, ribbon, mountains, atmosphere, wheel };
 }
 
 // po utracie kontekstu render-targety trzeba zbudować od nowa
@@ -175,15 +177,16 @@ if (window.__dbg) { window.__dbg.settings = settings; window.__dbg.audio = audio
 // Fale i puls sfery pochodzą WYŁĄCZNIE z uderzeń w ścieżce "bebny"
 // (track.onsetT/onsetS to onsety tego stemu z siłą znormalizowaną p95).
 const onsets = new EventCursor(track.onsetT, track.onsetS);
+// Uderzenia „inne" — osobny kursor: rytm tej ścieżki jedzie na kręgi na piasku.
+const oOnsets = new EventCursor(track.otherOnsetT, track.otherOnsetS);
 let lastBass = -1, lastBurst = -10;
 function resetCursors(t) {
   onsets.reset(t);
+  oOnsets.reset(t);
   lastBurst = t - 2;    // po przewinięciu nie strzelamy fajerwerkiem od razu
   lastWaveT = t - 2;    // …i nie blokujemy pierwszej fali debounce'em z przyszłości
-  lastSpark = t - 2;    // …i nie sypiemy iskrami za akcent, który już minął
   oPeakPrev = 0;
-  sparkAcc = 0;         // emisja iskier startuje od zera (bez „zaległych" drobin)
-  S.sparkEnv = 0;
+  S.otherEnv = 0;
 }
 
 // Odporny reset warstwy sceny. Bez tego pojedynczy brak metody (np. stary
@@ -213,7 +216,7 @@ function restartTrack() {
   beginSeek(0);         // seek jest asynchroniczny — patrz currentTime()
   resetCursors(0);
   safeReset(ground, "reset");
-  safeReset(sparks, "reset");
+  safeReset(wheel, "reset");
   if (playing) for (const el of els) el.play().catch(() => {});
   if (window.__viz) window.__viz.t = 0;
 }
@@ -223,22 +226,19 @@ const S = {
   vRms: 0, vProb: 0, vMidi: 60, vCent: 0,
   bRms: 0, bCent: 0,
   dRms: 0, oRms: 0, oSlow: 0, oCent: 0, tempo: 120,
-  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0, sparksFired: 0,
+  energy: 0, dropEnv: 0, dropLog: [], beatPulse: 0, wavesFired: 0, onsetsFired: 0, otherHits: 0, bassHits: 0, bursts: 0,
 };
 let lastWaveT = -10; // debounce fal (audit P0-6)
-// ISKRY = obraz ścieżki „inne" w danej chwili (mapowanie w README):
-//   gęstość  ← obwiednia `peak`     (ile się dzieje w „inne")
-//   rozmiar  ← `peak`               (jak głośny jest akcent)
-//   kolor    ← `centroid_hz`        (jak jasne jest widmo)
-//   elewacja ← `centroid_hz`        (jasne dźwięki wylatują z góry kuli)
-const SPARK_PEAK = 0.50;   // próg akcentu (zbocze `peak`, p98) → jedna iskra „na błysk"
-const SPARK_LOUD = 0.10;   // poniżej tej głośności „inne" praktycznie milczy
-const SPARK_FULL = 0.55;   // pełna gęstość emisji
-let lastSpark = -10;       // czas ostatniej iskry akcentowej (refrakcja 0.45 s)
-let oPeakPrev = 0;         // poprzednia próbka peak — detekcja ZBOCZA, nie poziomu
-let sparkAcc = 0;          // akumulator emisji (iskry/s * dt)
-S.sparkEnv = 0;            // obwiednia głośności „inne" (gęstość emisji)
-S.sparkBright = 0;         // jasność widma „inne" 0..1 (kolor iskier)
+// KORONA = jeden słupek na UDERZENIE ścieżki „inne" (mapowanie w README):
+//   wysokość ← siła uderzenia z `events.onsets`
+//   kolor    ← `centroid_hz` w chwili uderzenia (jasne widmo = biały żar)
+const OTHER_LOUD = 0.10;   // poniżej tej głośności „inne" praktycznie milczy
+const OTHER_FULL = 0.55;   // górna skala obwiedni na panelu H
+
+let oPeakPrev = 0;         // ostatnia próbka `peak` — tylko sonda/HUD
+
+S.otherEnv = 0;            // obwiednia głośności „inne" (tylko panel H)
+S.otherBright = 0;         // jasność widma „inne" 0..1 (kolor słupka)
 if (window.__dbg) window.__dbg.S = S;
 // pomiary z checklisty: FPS p95 z bufora 240 klatek
 const fpsHist = new Float32Array(240);
@@ -362,7 +362,7 @@ function frame() {
   if (seekT === null && t < prevT - 0.25) {
     resetCursors(t);
     safeReset(ground, "reset");
-  safeReset(sparks, "reset");
+    safeReset(wheel, "reset");
   }
   prevT = t;
   if (hudOn) hudPanel.bars(t, dt); // panel H: słupki 30 fps, tylko gdy widoczny
@@ -437,42 +437,32 @@ function frame() {
     S.beatPulse = Math.max(S.beatPulse, 0.50 + sn * 0.50); // sfera pulsuje raz, na ten sam atak
   });
 
-  // ISKRY: ciągła emisja z kuli, w całości sterowana ścieżką „inne".
-  // Gęstość = obwiednia `peak` (gęsty fragment sypie iskrami, cichy ledwo jedną),
-  // rozmiar i prędkość = `peak`, kolor i elewacja na kuli = `centroid_hz`.
-  // Dodatkowo przekroczenie progu daje jedną iskrę „na błysk" (transjent).
+  // RYTM „inne": kręgi jadą WYŁĄCZNIE na uderzeniach (events.onsets).
+  // Jedno uderzenie = jeden krąg. Siła → zasięg i jasność, rejestr widma → barwa.
+  // Rytm powstaje z samych zdarzeń, a nie z obwiedni głośności (ta mówiła
+  // tylko ILE się dzieje — i to była cała poprzednia wizualizacja).
   if (g.inne) {
-    const loud = clamp((oPeakRaw - SPARK_LOUD) / Math.max(0.05, SPARK_FULL - SPARK_LOUD), 0, 1);
-    // jasność widma w log2 — ucho słyszy częstotliwość logarytmicznie
-    const cz = Math.log2(Math.max(80, oCentRaw));
-    const bright = clamp((cz - track.oCentLo) / Math.max(0.5, track.oCentHi - track.oCentLo), 0, 1);
-    S.sparkBright = bright;
-    // obwiednia: szybki atak, spokojny powrót — gęstość nie „miga" na każdym akcencie
-    S.sparkEnv = damp(S.sparkEnv, loud, loud > S.sparkEnv ? 9.0 : 2.2, dt);
-
-    sparkAcc += (0.15 + 2.80 * Math.pow(S.sparkEnv, 1.7)) * dt;
-    let guard = 0;
-    while (sparkAcc >= 1 && guard++ < 4) {
-      sparkAcc -= 1;
-      sparks.spawn(S.sparkEnv, bright, core.surfaceRadius());
-      S.sparksFired++;
-    }
-    // akcent: przekroczenie progu → iskra od razu, żeby uderzenie „strzeliło"
-    if (oPeakPrev < SPARK_PEAK && oPeakRaw >= SPARK_PEAK && t - lastSpark > 0.45) {
-      lastSpark = t;
-      sparks.spawn(clamp(loud * 1.15, 0, 1), bright, core.surfaceRadius());
-      S.sparksFired++;
-    }
+    oOnsets.poll(t, (t0, s) => {
+      // jasność widma w chwili uderzenia (log2 — ucho słyszy częstotliwość logarytmicznie)
+      const cz = Math.log2(Math.max(80, sampleAt(track.oCent, track.fps, t0)));
+      const bright = clamp((cz - track.oCentLo) / Math.max(0.5, track.oCentHi - track.oCentLo), 0, 1);
+      S.otherBright = bright;
+      S.otherHits++;
+      wheel.hit(s, bright);
+    });
+    // obwiednia tylko na panel H — mówi, jak głośno jest w „inne" W TEJ CHWILI
+    const loud = clamp((oPeakRaw - OTHER_LOUD) / Math.max(0.05, OTHER_FULL - OTHER_LOUD), 0, 1);
+    S.otherEnv = damp(S.otherEnv, loud, loud > S.otherEnv ? 9.0 : 2.2, dt);
     oPeakPrev = oPeakRaw;
   } else {
-    oPeakPrev = 0; // wyciszone „inne" = zero iskier
-    sparkAcc = 0;
-    S.sparkEnv = 0;
+    oPeakPrev = 0; // wyciszone „inne" = ciemna korona
+    S.otherEnv = 0;
+    S.otherBright = 0;
   }
 
   // aktualizacje systemów
   ground.update(t, S.energy, S.beatPulse);
-  sparks.update(dt);
+  wheel.update(dt, !!g.inne, S.tempo);
   // Struktura kuli reaguje na bas CIĄGLE (obwiednia S.bRms w core.update) —
   // żadnych impulsów na pojedynczy bit.
   // DROP: energia wystrzeliła ponad wolną obwiednię (cisza -> głośna muzyka).
@@ -558,11 +548,12 @@ function frame() {
       // bas: obwiednia SCENY (w core), nie pomocnicze S.bRms — to ona rusza kulą
       env: { vRms: S.vRms, bRms: core.bass, dRms: S.dRms, oRms: S.oRms, energy: S.energy },
       tempo: S.tempo,
-      sparks: {
-        alive: sparks.alive, pool: sparks.pool ?? 0, fired: S.sparksFired,
-        env: S.sparkEnv, bright: S.sparkBright, peak: oPeakPrev,
+      other: {
+        env: S.otherEnv, bright: S.otherBright, peak: oPeakPrev,
+        marks: wheel.marks, rate: wheel.lapRate,
       },
       dropEnv: S.dropEnv, onsets: S.onsetsFired, bursts: S.bursts, otherHits: S.otherHits,
+      wheelMarks: wheel.marks,
       track: TRACK_TITLE, duration: track.duration,
       gains: `w${settings.gain.wokal} b${settings.gain.bas} d${settings.gain.bebny} i${settings.gain.inne}`,
       volume: Math.round(settings.volume * 100) + "%",
@@ -579,14 +570,15 @@ function frame() {
       energy: S.energy, dropEnv: S.dropEnv, dropLog: S.dropLog.slice(), beatPulse: S.beatPulse,
       wavesFired: S.wavesFired, onsetsFired: S.onsetsFired, bursts: S.bursts, fps,
       otherHits: S.otherHits,
+      wheel: { marks: wheel.marks, total: wheel.total, phase: +wheel.phase.toFixed(3),
+        rate: +wheel.lapRate.toFixed(2), lastLane: wheel.lastLane,
+        bpm: +S.tempo.toFixed(1) },
       fpsP95, calls, tris,
       ribbonW: ribbon.width, ribbon: ribbon.probe,
       core: { pulse: core.pulse, scale: core.scale, glow: core.glow,
         uStruct: core.uniforms.uStruct.value, uWobble: core.uniforms.uWobble.value },
-      sparks: { alive: sparks.alive, spawned: sparks.spawned, fired: S.sparksFired,
-        peak: +oPeakPrev.toFixed(3), env: +S.sparkEnv.toFixed(3),
-        bright: +S.sparkBright.toFixed(3), loud: +sparks.lastLoud.toFixed(3),
-        tint: [sparks.lastBright, sparks.lastLoud] },
+      other: { peak: +oPeakPrev.toFixed(3), env: +S.otherEnv.toFixed(3),
+        bright: +S.otherBright.toFixed(3) },
       ctxLost, track: TRACK_TITLE,
       muted: Object.keys(settings.gain).filter((k) => !settings.gain[k]),
       // poziom każdego elementu audio (głośność ogólna × wyciszenie ścieżki)

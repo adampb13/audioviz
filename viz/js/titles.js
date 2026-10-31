@@ -8,7 +8,6 @@
 export const TRACK_TITLES = {
   blindinglights: "Blinding Lights",
   familyties: "Family Ties",
-  silence: "Silence",
 };
 
 export function titleFor(slug) {

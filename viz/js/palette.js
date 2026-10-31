@@ -193,7 +193,7 @@ export function applyPreset(key, sys) {
     top: p.skyTop, horizon: p.skyHorizon, glow: p.glow ?? p.gold,
     warm: preset.stars.warm, cool: preset.stars.cool,
   });
-  sys.sparks?.setPalette(preset.spark);
+  sys.wheel?.setPalette(preset.spark);
   sys.post?.setPalette({ lift: preset.lift });
 
   applyCss({ ...preset, key });

@@ -80,7 +80,7 @@
   #hud .row.vec { height: 20px; }
   #hud .lb { flex: none; width: 74px; color: rgba(var(--txt-rgb),.52); font-size: 9.5px;
     letter-spacing: .01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  /* • przy parametrach, które sterują iskrami (peak, centroid) */
+  /* • przy parametrach, które sterują kręgami (onset, centroid) */
   #hud .lb.drv { color: rgba(255,214,150,.92); }
   #hud .lb.drv::after { content: "•"; margin-left: 3px; color: #ffb347; font-size: 11px; }
   #hud .bar { position: relative; flex: 1 1 auto; height: 3px; border-radius: 2px;
@@ -209,7 +209,7 @@
 <body>
 <div id="overlay">
   <button id="start">Start</button>
-  <small>Spacja: pauza · H: parametry · S: ustawienia · utwór: <b id="hint-track">—</b></small>
+  <small>Spacja: pauza · H: parametry · Esc: ustawienia · utwór: <b id="hint-track">—</b></small>
   <div id="err"></div>
 </div>
 <div id="hud"></div>
