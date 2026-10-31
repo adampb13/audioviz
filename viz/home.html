@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="pl" data-page="home">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>audioviz — biblioteka utworów</title>
+<style>
+  /* Ta strona jest „zapleczem" wizualizacji, więc trzyma jej tonację:
+     ciepła czerń, jeden złoty akcent, mono na etykietach. Żadnych nowych
+     kolorów — inaczej przejście biblioteka -> wizualizacja wygląda jak
+     dwie różne aplikacje. */
+  :root {
+    --acc: #d9984a; --acc-rgb: 217, 152, 74;
+    --acc2: #ffcf8a; --acc2-rgb: 255, 207, 138;
+    --txt-rgb: 236, 223, 200;
+    --ink: #0a0603;
+    --ok: #7bc47f; --ok-rgb: 123, 196, 127;
+    --bad: #d9736a; --bad-rgb: 217, 115, 106;
+    --line: rgba(var(--acc-rgb), .16);
+    --card: linear-gradient(180deg, rgba(255, 207, 138, .05), rgba(255, 207, 138, .014));
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background:
+      radial-gradient(1100px 560px at 12% -12%, rgba(var(--acc-rgb), .11), transparent 62%),
+      radial-gradient(880px 480px at 88% -6%, rgba(var(--acc2-rgb), .07), transparent 58%),
+      var(--ink);
+    color: rgb(var(--txt-rgb));
+    font: 14px/1.55 system-ui, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgba(var(--acc-rgb), .3); }
+  a { color: inherit; }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 34px 26px 120px; }
+
+  /* ---------- nagłówek ---------- */
+  header.top { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .brand .mark { font-size: 23px; letter-spacing: -.02em; font-weight: 500; }
+  .brand .mark i { font-style: normal; color: var(--acc2); }
+  .brand .sub { font: 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .22em;
+    text-transform: uppercase; color: rgba(var(--acc-rgb), .55); }
+  .env { font: 10.5px/1.6 ui-monospace, Consolas, monospace; letter-spacing: .06em;
+    color: rgba(var(--txt-rgb), .42); text-align: right; }
+  .env b { color: rgba(var(--acc2-rgb), .75); font-weight: 500; }
+  .env .no { color: rgba(var(--bad-rgb), .85); }
+
+  /* ---------- sekcja wgrywania ---------- */
+  .hero { margin: 30px 0 34px; }
+  .hero h1 { font-size: 27px; font-weight: 500; letter-spacing: -.015em; margin: 0 0 7px; }
+  .hero p { margin: 0 0 18px; max-width: 62ch; color: rgba(var(--txt-rgb), .62); }
+  .drop {
+    position: relative; border: 1px dashed rgba(var(--acc-rgb), .32); border-radius: 16px;
+    padding: 22px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    background: var(--card); transition: border-color .18s, background .18s, transform .18s;
+  }
+  .drop.hot { border-color: rgba(var(--acc2-rgb), .8); background: rgba(var(--acc-rgb), .09); }
+  .drop.busy { pointer-events: none; opacity: .72; }
+  .drop .hint { font: 11px/1.5 ui-monospace, Consolas, monospace; letter-spacing: .04em;
+    color: rgba(var(--txt-rgb), .45); }
+  .drop .name { color: rgba(var(--acc2-rgb), .9); font: 12px/1.5 ui-monospace, Consolas, monospace; }
+  .prog { flex: 1 1 220px; height: 4px; border-radius: 99px; background: rgba(var(--acc-rgb), .12);
+    overflow: hidden; opacity: 0; transition: opacity .2s; }
+  .prog.on { opacity: 1; }
+  .prog i { display: block; height: 100%; width: 0; border-radius: 99px;
+    background: linear-gradient(90deg, rgba(var(--acc-rgb), .85), var(--acc2)); transition: width .12s linear; }
+  .alt { margin-top: 10px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+    font: 10.5px/1.5 ui-monospace, Consolas, monospace; color: rgba(var(--txt-rgb), .38); letter-spacing: .05em; }
+
+  /* ---------- przyciski ---------- */
+  button, .btn { font: inherit; cursor: pointer; border-radius: 999px; border: 1px solid var(--line);
+    background: transparent; color: rgba(var(--acc2-rgb), .92); padding: 8px 16px;
+    letter-spacing: .04em; transition: background .16s, border-color .16s, color .16s, opacity .16s;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+  button:hover, .btn:hover { background: rgba(var(--acc-rgb), .12); border-color: rgba(var(--acc-rgb), .38); }
+  button:focus-visible, .btn:focus-visible, .drop:focus-visible { outline: 2px solid rgba(var(--acc2-rgb), .7);
+    outline-offset: 2px; }
+  button[disabled] { opacity: .34; pointer-events: none; }
+  .primary { background: linear-gradient(180deg, rgba(var(--acc-rgb), .26), rgba(var(--acc-rgb), .12));
+    border-color: rgba(var(--acc-rgb), .5); color: #ffe6c2; }
+  .primary:hover { background: linear-gradient(180deg, rgba(var(--acc-rgb), .38), rgba(var(--acc-rgb), .18)); }
+  .ghost { font-size: 12px; padding: 6px 13px; color: rgba(var(--txt-rgb), .72); }
+  .danger { font-size: 12px; padding: 6px 13px; color: rgba(var(--bad-rgb), .8); border-color: rgba(var(--bad-rgb), .26); }
+  .danger:hover { background: rgba(var(--bad-rgb), .12); border-color: rgba(var(--bad-rgb), .5); }
+  .sm { font-size: 11px; padding: 5px 11px; }
+  /* [hidden] na przyciskach: nasza reguła display:inline-flex wygrywa z domyślną,
+     więc ukrywanie akcji musi być jawnie mocniejsze */
+  [hidden] { display: none !important; }
+  .btn.off { opacity: .34; pointer-events: none; }
+
+  /* ---------- lista ---------- */
+  .listhead { display: flex; align-items: baseline; gap: 14px; margin: 0 0 14px;
+    padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+  .listhead h2 { font: 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .22em;
+    text-transform: uppercase; color: rgba(var(--acc-rgb), .68); margin: 0; font-weight: 500; }
+  .listhead .count { font: 10.5px/1 ui-monospace, Consolas, monospace;
+    color: rgba(var(--txt-rgb), .34); letter-spacing: .08em; }
+  .listhead .spacer { flex: 1; }
+
+  #tracks { display: grid; grid-template-columns: repeat(auto-fill, minmax(342px, 1fr)); gap: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 15px; padding: 16px 17px 14px;
+    background: var(--card); position: relative; overflow: hidden; }
+  .card::before { content: ""; position: absolute; inset: 0 0 auto; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(var(--acc2-rgb), .3), transparent); }
+  .card.ready { border-color: rgba(var(--acc-rgb), .3); }
+  .card.job { border-color: rgba(var(--acc2-rgb), .45); }
+  .c-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .c-head h3 { margin: 0; font-size: 16.5px; font-weight: 500; letter-spacing: -.01em; }
+  .c-head .slug { display: block; font: 10px/1.7 ui-monospace, Consolas, monospace;
+    color: rgba(var(--txt-rgb), .34); letter-spacing: .09em; }
+  .badge { font: 9.5px/1 ui-monospace, Consolas, monospace; letter-spacing: .16em;
+    text-transform: uppercase; padding: 5px 9px; border-radius: 99px; white-space: nowrap;
+    border: 1px solid rgba(var(--txt-rgb), .16); color: rgba(var(--txt-rgb), .5); }
+  .badge.ready { border-color: rgba(var(--ok-rgb), .4); color: rgba(var(--ok-rgb), .95);
+    background: rgba(var(--ok-rgb), .08); }
+  .badge.analyzed { border-color: rgba(var(--acc-rgb), .42); color: rgba(var(--acc2-rgb), .9); }
+  .badge.busy { border-color: rgba(var(--acc2-rgb), .5); color: var(--acc2); }
+
+  ol.steps { list-style: none; display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px; margin: 15px 0 13px; padding: 0; }
+  ol.steps li { font: 10px/1.45 ui-monospace, Consolas, monospace; letter-spacing: .04em;
+    color: rgba(var(--txt-rgb), .3); position: relative; padding-left: 13px; }
+  ol.steps li::before { content: ""; position: absolute; left: 0; top: 4px; width: 6px; height: 6px;
+    border-radius: 50%; border: 1px solid rgba(var(--txt-rgb), .26); }
+  ol.steps li.done { color: rgba(var(--txt-rgb), .72); }
+  ol.steps li.done::before { background: rgba(var(--acc2-rgb), .9); border-color: transparent;
+    box-shadow: 0 0 7px rgba(var(--acc2-rgb), .45); }
+  ol.steps li.run { color: var(--acc2); }
+  ol.steps li.run::before { background: var(--acc2); border-color: transparent;
+    animation: pulse 1.1s ease-in-out infinite; }
+  ol.steps li b { display: block; font-weight: 500; color: inherit; }
+  ol.steps li span { display: block; color: rgba(var(--txt-rgb), .34); font-size: 9.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+
+  /* Akcje: główna na całą szerokość, pod nią rząd drobnych — trzy przyciski
+     w jednej linii nie mieszczą się w karcie i łamały się po jednym, co
+     wyglądało jak przypadek. */
+  .actions { display: grid; gap: 8px; }
+  .actions .primary { justify-content: center; padding: 9px 16px; }
+  .actions .row { display: flex; gap: 7px; flex-wrap: wrap; }
+  .actions .row button { flex: 0 0 auto; }
+  .actions .note { font: 10px/1.4 ui-monospace, Consolas, monospace; color: rgba(var(--bad-rgb), .8); }
+
+  .jobline { margin-top: 11px; font: 10.5px/1.5 ui-monospace, Consolas, monospace;
+    color: rgba(var(--acc2-rgb), .78); letter-spacing: .04em; display: none; }
+  .jobline.on { display: block; }
+
+  .empty { border: 1px dashed var(--line); border-radius: 15px; padding: 26px;
+    color: rgba(var(--txt-rgb), .4); font: 11.5px/1.7 ui-monospace, Consolas, monospace; }
+
+  /* ---------- panel zadania ---------- */
+  #jobpane { position: fixed; right: 18px; bottom: 18px; width: min(430px, calc(100vw - 36px));
+    background: rgba(12, 7, 3, .93); border: 1px solid rgba(var(--acc-rgb), .26);
+    border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, .6); padding: 13px 14px;
+    backdrop-filter: blur(10px); transform: translateY(14px); opacity: 0; pointer-events: none;
+    transition: opacity .22s, transform .22s; z-index: 20; }
+  #jobpane.on { opacity: 1; transform: none; pointer-events: auto; }
+  #jobpane .jp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  #jobpane .jp-title { font: 11px/1.3 ui-monospace, Consolas, monospace; letter-spacing: .12em;
+    text-transform: uppercase; color: rgba(var(--acc2-rgb), .9); }
+  #jobpane .jp-meta { font: 10px/1.3 ui-monospace, Consolas, monospace; color: rgba(var(--txt-rgb), .4);
+    margin-left: auto; }
+  #jobpane .jp-steps { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  #jobpane .jp-step { font: 9.5px/1 ui-monospace, Consolas, monospace; letter-spacing: .08em;
+    padding: 4px 7px; border-radius: 6px; border: 1px solid rgba(var(--txt-rgb), .14);
+    color: rgba(var(--txt-rgb), .4); text-transform: uppercase; }
+  #jobpane .jp-step.done { color: rgba(var(--ok-rgb), .9); border-color: rgba(var(--ok-rgb), .32); }
+  #jobpane .jp-step.run { color: var(--acc2); border-color: rgba(var(--acc2-rgb), .45);
+    background: rgba(var(--acc-rgb), .12); }
+  #jobpane .jp-step.err { color: rgba(var(--bad-rgb), .9); border-color: rgba(var(--bad-rgb), .4); }
+  #log { font: 10px/1.5 ui-monospace, Consolas, monospace; color: rgba(var(--txt-rgb), .56);
+    background: rgba(0, 0, 0, .34); border: 1px solid rgba(var(--acc-rgb), .12); border-radius: 9px;
+    padding: 8px 9px; height: 148px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+    scrollbar-width: thin; }
+  #log .err { color: rgba(var(--bad-rgb), .95); }
+  #log .ok { color: rgba(var(--ok-rgb), .9); }
+
+  /* ---------- dialog stemów ---------- */
+  dialog { border: 1px solid rgba(var(--acc-rgb), .28); border-radius: 16px; padding: 20px;
+    background: #100a05; color: rgb(var(--txt-rgb)); width: min(560px, calc(100vw - 40px));
+    box-shadow: 0 30px 90px rgba(0, 0, 0, .7); }
+  dialog::backdrop { background: rgba(4, 2, 1, .68); backdrop-filter: blur(2px); }
+  dialog h2 { margin: 0 0 4px; font-size: 17px; font-weight: 500; }
+  dialog p { margin: 0 0 16px; color: rgba(var(--txt-rgb), .55); font-size: 12.5px; }
+  .stemrow { display: grid; grid-template-columns: 84px 1fr auto; gap: 10px; align-items: center;
+    padding: 7px 0; border-top: 1px solid rgba(var(--acc-rgb), .1); }
+  .stemrow label { font: 11px/1 ui-monospace, Consolas, monospace; letter-spacing: .08em;
+    color: rgba(var(--acc2-rgb), .8); }
+  .stemrow input[type=text] { width: 100%; font: 11.5px/1.4 ui-monospace, Consolas, monospace;
+    background: rgba(0, 0, 0, .3); border: 1px solid var(--line); color: rgb(var(--txt-rgb));
+    border-radius: 8px; padding: 7px 9px; }
+  .stemrow .pick { font-size: 11px; }
+  .stemrow .ok { font: 10px/1 ui-monospace, monospace; color: rgba(var(--ok-rgb), .9); }
+  dialog .foot { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+
+  #toast { position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 10px);
+    background: rgba(14, 8, 4, .95); border: 1px solid rgba(var(--acc-rgb), .3); color: rgb(var(--txt-rgb));
+    padding: 10px 16px; border-radius: 10px; font: 12px/1.4 ui-monospace, Consolas, monospace;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 30; max-width: 80vw; }
+  #toast.on { opacity: 1; transform: translate(-50%, 0); }
+  #toast.bad { border-color: rgba(var(--bad-rgb), .5); color: #ffd9d4; }
+
+  @media (max-width: 620px) {
+    .wrap { padding: 22px 16px 120px; }
+    .hero h1 { font-size: 22px; }
+    #tracks { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="mark">audio<i>viz</i></span>
+      <span class="sub">biblioteka utworów</span>
+    </div>
+    <div class="env" id="env">sprawdzam środowisko…</div>
+  </header>
+
+  <section class="hero">
+    <h1>Wgraj utwór i przygotuj go do wizualizacji</h1>
+    <p>Podział na cztery ścieżki, analiza widma i rytmu, detekcja uderzeń — każde zadanie
+       uruchamia te same skrypty, których używamy z terminala. Gotowy utwór otwierasz
+       jednym przyciskiem.</p>
+
+    <div class="drop" id="drop" role="button" tabindex="0" aria-label="wgraj plik audio">
+      <button class="primary" id="pick" type="button">wybierz plik</button>
+      <span class="hint" id="drophint">albo przeciągnij tutaj · wav, mp3, flac, m4a, ogg</span>
+      <div class="prog" id="prog"><i></i></div>
+      <input type="file" id="file" accept=".wav,.mp3,.flac,.m4a,.ogg,.aiff,audio/*" hidden />
+    </div>
+    <div class="alt">
+      <span>masz już stem'y?</span>
+      <button class="ghost sm" id="stems-open" type="button">wgraj wokal / bas / bębny / inne</button>
+      <span id="sephint"></span>
+    </div>
+  </section>
+
+  <section class="list">
+    <div class="listhead">
+      <h2>utwory</h2>
+      <span class="count" id="count">—</span>
+      <span class="spacer"></span>
+      <button class="ghost sm" id="refresh" type="button">odśwież</button>
+    </div>
+    <div id="tracks"><div class="empty">wczytuję listę…</div></div>
+  </section>
+</div>
+
+<aside id="jobpane" aria-live="polite">
+  <div class="jp-head">
+    <span class="jp-title" id="jp-title">przygotowanie</span>
+    <span class="jp-meta" id="jp-meta"></span>
+    <button class="ghost sm" id="jp-cancel" type="button">anuluj</button>
+  </div>
+  <div class="jp-steps" id="jp-steps"></div>
+  <div id="log"></div>
+</aside>
+
+<dialog id="stems">
+  <form method="dialog" id="stems-form">
+    <h2>Wgraj gotowe stem'y</h2>
+    <p>Cztery pliki audio pod jedną nazwą utworu. Po wgraniu uruchom analizę —
+       podział na ścieżki nie jest wtedy potrzebny.</p>
+    <div class="stemrow">
+      <label for="stems-slug">nazwa</label>
+      <input type="text" id="stems-slug" placeholder="np. familyties" spellcheck="false" />
+      <span></span>
+    </div>
+    <div id="stems-rows"></div>
+    <div class="foot">
+      <button type="button" class="ghost" id="stems-cancel">anuluj</button>
+      <button type="button" class="primary" id="stems-send">wgraj i analizuj</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status"></div>
+<script type="module" src="./js/home.js"></script>
+</body>
+</html>

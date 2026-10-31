@@ -12,11 +12,17 @@ powierzchnia, barwa i rozmiar. Wszystko, co zostaje, ma być gładkie.
 ## Uruchomienie
 
 ```bash
-python viz/serve.py          # serwer na :8080, root = katalog repo
-# przeglądarka: http://127.0.0.1:8080/viz/index.html
+.venv/Scripts/python.exe server.py        # serwer aplikacji na :8080 (biblioteka + API + statyka)
+# biblioteka:      http://127.0.0.1:8080/
+# wizualizacja:    http://127.0.0.1:8080/viz/index.html?track=<nazwa>
 ```
 
-- `?track=<nazwa>` — utwór = katalog w `data/` (domyślnie `blindinglights`). Parametr to **slug katalogu**, nie tytuł: na ekranie (podpowiedź pod Startem i panel H) idzie nazwa z mapy `TRACK_TITLES` w `main.js` (`blindinglights` → „Blinding Lights”), a bez wpisu — slug z wielkiej litery.
+`python viz/serve.py` nadal działa (cienki wrapper na `server.py`), ale sam
+`http.server` już nie wystarczy: upload, kolejka zadań i `Range` dla WAV-ów
+wymagają API. Serwer woła skrypty **tym samym interpreterem**, którym został
+uruchomiony — czyli z `.venv`, gdzie jest librosa.
+
+- `?track=<nazwa>` — utwór = katalog w `data/` (domyślnie `blindinglights`). Parametr to **slug katalogu**, nie tytuł: na ekranie (podpowiedź pod Startem i panel H) idzie nazwa z mapy `TRACK_TITLES` w `titles.js` (`blindinglights` → „Blinding Lights”), a bez wpisu — slug z wielkiej litery.
   Wymaga `data/<nazwa>/analysis.json` + stemów `wokal/bas/bebny/inne.wav`
   (wav-y są poza repo — odtwarzalne przez `separate.py` + `analyze_stems.py`).
   Kolor sfery zależy od energii całości, a pojedyncze iskry po bokach — od
@@ -30,6 +36,46 @@ python viz/serve.py          # serwer na :8080, root = katalog repo
   (~6 s przy 144 fps) z próbką każdej klatki (`t, v, b, be, cb, d, o, e, st, g, p`).
   `__viz` odświeża się 4×/s, więc do pomiaru opóźnień („bas → struktura kuli”)
   potrzebny jest zapis per-klatka — inaczej rozdzielczość pomiaru to 250 ms.
+
+## Biblioteka — strona główna (`/viz/home.html`)
+
+Miejsce, w którym utwory powstają. Pokazuje wszystko, co leży w `data/`, i dla
+każdego utworu cztery kropki stanu: źródło → stem'y → analiza → uderzenia.
+Zielona odznaka „gotowy” = `analysis.json` ma klatki wszystkich czterech
+ścieżek **i** listę uderzeń; taki utwór otwiera się przyciskiem
+„otwórz wizualizację” (to zwykły link do `index.html?track=<slug>`).
+
+| krok | co robi | wynik |
+|---|---|---|
+| źródło | wgranie pliku (`PUT /api/upload`) | `data/<slug>.<ext>` |
+| stem'y | `separate.py` (Demucs) | `data/<slug>/{wokal,bas,bebny,inne}.wav` |
+| analiza | `analyze_stems.py` | `data/<slug>/analysis.json` |
+| uderzenia | `detect_hits.py` | `events.hits` w `analysis.json` |
+
+- „przygotuj” uruchamia **brakujące** kroki po kolei; analiza bez detekcji
+  uderzeń nie daje utworu, którego da się puścić, więc łańcuch dociąga się sam.
+- Brak `audio-separator` w środowisku nie blokuje pracy: „wgraj stem'y” pozwala
+  wrzucić cztery gotowe pliki, a przycisk podziału jest wtedy wyłączony z
+  wyjaśnieniem, zamiast kończyć się błędem po minucie.
+- Jedna kolejka zadań, jeden worker — separacja i analiza zjadają cały CPU,
+  równoległe uruchomienia tylko dusiłyby się nawzajem. Log leci na żywo do
+  panelu w prawym dolnym rogu (z anulowaniem).
+- `analysis.json` to ~26 MB na utwór, więc lista czyta tylko podsumowanie:
+  jedno parsowanie na wersję pliku (mtime+rozmiar), cache w pamięci **i** w
+  `data/<slug>/analysis.meta.json`, żeby po restarcie serwera nie czytać 26 MB
+  od nowa.
+
+API (wszystko JSON, jeden proces):
+
+| metoda | ścieżka | znaczenie |
+|---|---|---|
+| `GET` | `/api/state` | utwory + aktywne zadania + możliwości środowiska |
+| `PUT` | `/api/upload?name=x.wav` | surowe bajty pliku → nowy utwór |
+| `PUT` | `/api/stems/<slug>?stem=wokal&ext=.wav` | pojedynczy stem |
+| `POST` | `/api/run` `{slug, prepare:true}` lub `{slug, steps:[…]}` | uruchom skrypty |
+| `GET` | `/api/job/<id>` | log zadania (200 ostatnich linii) |
+| `POST` | `/api/cancel?id=<id>` | zatrzymanie zadania |
+| `DELETE` | `/api/tracks/<slug>` + nagłówek `X-Confirm` | usuń utwór wraz z katalogiem |
 
 ## Panel ścieżek (testowanie interakcji)
 

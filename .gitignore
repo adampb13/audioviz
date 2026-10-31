@@ -17,3 +17,8 @@ data/*/*.mp3
 *.png
 viz/out/
 scratch/
+
+# podsumowanie analysis.json (cache listy utworów)
+data/*/analysis.meta.json
+data/*/analysis.json
+!data/blindinglights/analysis.json

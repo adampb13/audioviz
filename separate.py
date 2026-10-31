@@ -1,60 +1,95 @@
-import os
+"""Podział utworu na 4 stem'y (wokal, bas, bębny, inne) modelem Demucs.
+
+Wejście:  data/<utwór>.<wav|mp3|flac|m4a|ogg>
+Wyjście: data/<utwór>/{wokal,bas,bebny,inne}.wav
+
+Użycie (z korzenia repo):
+    .venv/Scripts/python.exe separate.py data/familyties.wav
+    .venv/Scripts/python.exe separate.py data/familyties.wav --model htdemucs_ft.yaml
+
+Nazwy plików: biblioteka audio-separator zapisuje `<baza>_(Vocals)_wokal.wav`
+itd. — a cały dalszy pipeline (analyze_stems.py, wizualizacja) czyta proste
+`wokal.wav`. Dlatego po separacji pliki są przenoszone pod nazwę docelową.
+Bez tego analiza nie widzi stemów i kończy się komunikatem o braku pliku.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
 from pathlib import Path
-from audio_separator.separator import Separator
 
-def process_audio(file_path):
+STEM_KEYS = ("wokal", "bas", "bebny", "inne")
+MODEL = "htdemucs_ft.yaml"
+
+
+def process_audio(file_path: str | Path, model_name: str = MODEL) -> int:
     path = Path(file_path)
-    
-    # 1. Weryfikacja czy plik wejściowy istnieje
     if not path.is_file():
-        print(f"Błąd: Plik '{file_path}' nie istnieje.")
-        return
+        print(f"Błąd: plik '{file_path}' nie istnieje.", flush=True)
+        return 2
 
-    # 2. Tworzenie podfolderu 'data/x' (gdzie 'x' to nazwa pliku bez rozszerzenia)
-    # Dla pliku data/familyties.wav utworzy się folder data/familyties/
+    try:
+        from audio_separator.separator import Separator
+    except ModuleNotFoundError:
+        print(
+            "Błąd: brak modułu audio-separator w tym środowisku.\n"
+            "  .venv/Scripts/python.exe -m pip install audio-separator",
+            flush=True,
+        )
+        return 3
+
     output_dir = path.parent / path.stem
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Pliki wyjściowe zostaną zapisane w: {output_dir}")
+    print(f"Pliki wyjściowe: {output_dir}", flush=True)
 
-    # 3. Inicjalizacja separatora ze wskazaniem utworzonego folderu docelowego
-    separator = Separator(output_dir=str(output_dir))
+    # output_names nadaje polskie nazwy, ale biblioteka trzyma je DODATKOWO
+    # w nazwie pliku (`<baza>_(Vocals)_wokal.wav`) — patrz normalizacja niżej.
+    output_names = {"Vocals": "wokal", "Bass": "bas", "Drums": "bebny", "Other": "inne"}
 
-    # ---------------------------------------------------------
-    # WYBÓR MODELU I NAZW PLIKÓW WYJŚCIOWYCH
-    # ---------------------------------------------------------
-    
-    # OPCJA 1: Model podziału na 4 ścieżki (Wokal, Bas, Bębny, Inne)
-    model_name = "htdemucs_ft.yaml"
-    output_names = {
-        "Vocals": "wokal",
-        "Bass": "bas",
-        "Drums": "bebny",
-        "Other": "inne"
-    }
-    
-    # OPCJA 2: Wskazany przez Ciebie model (podział tylko na Wokal i Podkład)
-    # Aby go użyć, zakomentuj OPCJĘ 1 i odkomentuj linie poniżej:
-    # model_name = "UVR_MDX_NET_Inst_HQ_3.onnx"
-    # output_names = {
-    #     "Vocals": "wokal",
-    #     "Instrumental": "podklad"
-    # }
-
-    # 4. Pobieranie (jeśli to pierwsze użycie) i ładowanie modelu
-    print(f"Ładowanie modelu '{model_name}'...")
+    separator = Separator(output_dir=str(output_dir), output_format="WAV")
+    print(f"Ładowanie modelu '{model_name}' (pierwsze użycie = pobranie ~300 MB)...", flush=True)
     separator.load_model(model_filename=model_name)
 
-    # 5. Wykonanie separacji
-    # Słownik 'output_names' gwarantuje, że pliki wyjściowe otrzymają wskazane przez nas polskie nazwy
-    print(f"Rozpoczynam podział pliku {path.name}... (to może chwilę potrwać)")
-    output_files = separator.separate(str(path), output_names)
+    print(f"Separacja {path.name} — to może potrwać kilka minut...", flush=True)
+    produced = separator.separate(str(path), output_names)
 
-    # 6. Podsumowanie
-    print("\nProces zakończony pomyślnie! Wygenerowane ścieżki:")
-    for file in output_files:
-        print(f"- {output_dir / file}")
+    # --- normalizacja nazw: <baza>_(Vocals)_wokal.wav -> wokal.wav ---
+    final = []
+    for item in produced:
+        src = Path(item)
+        if not src.is_absolute():
+            src = output_dir / src.name
+        if not src.is_file():
+            continue
+        stem = next((k for k in STEM_KEYS if k in src.name.lower()), None)
+        if stem is None:
+            print(f"  ! nie rozpoznaję stemu w nazwie: {src.name}", flush=True)
+            continue
+        dst = output_dir / f"{stem}{src.suffix.lower()}"
+        if src.resolve() != dst.resolve():
+            if dst.exists():
+                dst.unlink()
+            src.replace(dst)
+        final.append(dst)
+        print(f"  -> {dst.name}", flush=True)
+
+    missing = [k for k in STEM_KEYS if not (output_dir / f"{k}.wav").is_file()]
+    if missing:
+        print(f"Błąd: brakuje stemów: {', '.join(missing)}", flush=True)
+        return 4
+    print(f"Gotowe: {len(final)} stem'y w {output_dir}", flush=True)
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("input", nargs="?", default="data/silence.wav",
+                    help="plik audio do podziału (domyślnie data/silence.wav)")
+    ap.add_argument("--model", default=MODEL, help=f"model Demucs (domyślnie {MODEL})")
+    a = ap.parse_args()
+    return process_audio(a.input, a.model)
+
 
 if __name__ == "__main__":
-    # Ścieżka do docelowego pliku audio
-    target_file = os.path.join("data", "silence.wav")
-    process_audio(target_file)
+    sys.exit(main())

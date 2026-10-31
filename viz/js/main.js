@@ -12,6 +12,7 @@ import { Atmosphere } from "./atmosphere.js";
 import { createPost } from "./postfx.js";
 import { createSettings } from "./settings.js";
 import { applyPreset, PRESETS, DEFAULT_PRESET } from "./palette.js";
+import { titleFor } from "./titles.js";
 
 // Wartości startowe sceny = preset domyślny (applyPreset i tak je ustawia,
 // ale konstruktory muszą dostać sensowne kolory już przy tworzeniu materiałów).
@@ -23,15 +24,9 @@ const params = new URLSearchParams(location.search);
 // ?debug = sonda + ślad klatek (ring 900 klatek ≈ 6 s przy 144 fps)
 const DEBUG = params.has("debug");
 const TRACK = params.get("track") || "blindinglights";
-// ?track= to NAZWA KATALOGU (slug), nie tytuł — do pokazania na ekranie jest
-// osobna mapa. Wcześniej podpowiedź pod przyciskiem Start miała wpisane na
-// sztywno „utwór: ?track=nazwa", więc po pauzie na ekranie wyglądało to jak
-// nazwa utworu wczytana z adresu. Nowy utwór: dopisz tytuł tutaj (bez wpisu
-// zostanie użyty slug z wielkiej litery).
-const TRACK_TITLES = {
-  blindinglights: "Blinding Lights",
-};
-const TRACK_TITLE = TRACK_TITLES[TRACK] || TRACK.charAt(0).toUpperCase() + TRACK.slice(1);
+// ?track= to NAZWA KATALOGU (slug), nie tytuł — do pokazania na ekranie służy
+// titleFor() z titles.js (wspólne z biblioteką, żeby obie strony mówiły to samo).
+const TRACK_TITLE = titleFor(TRACK);
 const AUDIO_DIR = `../data/${TRACK}/`;
 const FOG_DENSITY = 0.009; // FogExp2 0x1a0f08, 0.009 (audit v2 P0-C)
 

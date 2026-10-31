@@ -134,9 +134,10 @@
   #panel .foot { margin-top: 6px; padding-top: 6px; display: flex; align-items: center;
     justify-content: space-between; gap: 8px; border-top: 1px solid rgba(var(--acc-rgb),.11);
     font-size: 8.5px; white-space: nowrap; color: rgba(var(--acc-rgb),.34); }
-  #panel .foot button { all: unset; cursor: pointer; font-size: 9px; letter-spacing: .12em;
+  #panel .foot button, #panel .foot a { all: unset; cursor: pointer; font-size: 9px; letter-spacing: .12em;
     color: rgba(var(--acc-rgb),.6); text-transform: uppercase; }
-  #panel .foot button:hover { color: var(--acc2); }
+  #panel .foot button:hover, #panel .foot a:hover { color: var(--acc2); }
+  #panel .foot a:focus-visible { outline: 1px solid rgba(var(--acc-rgb),.6); outline-offset: 2px; }
   #panel .foot + .foot { margin-top: 2px; padding-top: 0; border-top: 0; }
   /* ---------- głośność ogólna ---------- */
   /* Suwak rysowany na własnym torze, bo natywny nie przyjmuje akcentu presetu.

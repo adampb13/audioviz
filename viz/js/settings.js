@@ -74,7 +74,12 @@ export function createSettings({
     }).join("") +
     "</div>" +
     '<div class="foot"><span>odtwarzanie</span>' +
-    '<button type="button" id="panel-restart" title="zagraj utwór od początku">od początku</button></div>';
+    '<button type="button" id="panel-restart" title="zagraj utwór od początku">od początku</button></div>' +
+    // wyjście do biblioteki — ta sama warstwa nawigacji, więc ten sam rytm
+    // co rząd „odtwarzanie", tylko druga linia (reguła .foot + .foot)
+    '<div class="foot"><span>utwory</span>' +
+    '<a id="panel-home" href="home.html" title="strona główna — biblioteka utworów">' +
+    'strona główna →</a></div>';
 
   document.body.append(btn, panel);
 
